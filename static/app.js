@@ -2,6 +2,7 @@ let csrf = '', current = null, page = 'overview', projects = [], dirty = false, 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const titles = { overview: '工程总览', cables: '电缆统计', params: '计算参数', aliases: '柜名匹配', terminal: '端子排出图', issues: '问题清单', outputs: '输出文件', guide: 'CAD 数据导出' };
+titles.validation = '项目检查';
 
 // 主题切换逻辑 (对齐 sentools)
 function updateThemeUI() {
@@ -83,6 +84,43 @@ function table(headers, rows) {
     return '<div class="table-wrap"><table><thead><tr>' + headers.map(h => '<th>' + esc(h) + '</th>').join('') + '</tr></thead><tbody>' + rows.map(r => '<tr>' + r.map(c => '<td>' + c + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>';
 }
 
+async function projectValidation(c) {
+    const projectId = current.id;
+    let report = await api('/projects/' + projectId + '/validation');
+    if (current?.id !== projectId || page !== 'validation') return;
+    c.innerHTML = '<div class="panel"><div class="actions"><button class="primary" id="run-validation">运行项目检查</button><a class="button" id="validation-json">下载 JSON</a><a class="button" id="validation-md">下载 Markdown</a></div><p id="validation-status"></p><div id="validation-stats" class="stats"></div><p class="muted" id="validation-coverage"></p><div class="actions"><label>严重程度<select id="validation-severity"><option value="">全部</option><option>ERROR</option><option>WARNING</option><option>INFO</option></select></label><label>规则<select id="validation-rule"><option value="">全部规则</option></select></label><label>电缆号<input id="validation-cable" placeholder="搜索电缆编号"></label><label>柜名<input id="validation-cabinet" placeholder="搜索起点或终点"></label></div><div id="validation-results"></div></div>';
+    function draw() {
+        $('#validation-status').textContent = report ? '检查时间：' + report.generated_at + (report.stale ? ' · 输入已变化，请重新检查' : '') : '尚未运行项目检查';
+        for (const [id, file] of [['validation-json', 'validation.json'], ['validation-md', 'validation.md']]) {
+            $('#' + id).hidden = !report;
+            $('#' + id).href = link('outputs/reports/' + file);
+        }
+        if (!report) return;
+        $('#validation-stats').innerHTML = ['ERROR', 'WARNING', 'INFO'].map(s => '<div class="stat"><span>' + s + '</span><strong>' + report.counts[s] + '</strong></div>').join('');
+        const coverage = report.coverage;
+        const terminalSource = coverage.terminal_source?.startsWith('端子数据.csv') ? '端子 CSV（优先于出图 TXT，支持两侧记录）' : '出图 TXT（单柜侧，自动生成电缆号）';
+        $('#validation-coverage').textContent = '检查范围：清册 ' + coverage.cable_rows + ' 行 · 端子 ' + coverage.terminal_rows + ' 行 · 柜坐标 ' + (coverage.cabinet_coordinates ?? 0) + ' 个 · 柜名映射 ' + (coverage.cabinet_aliases ?? 0) + ' 条。端子来源：' + terminalSource + '。路径：' + (coverage.path_result_reused ? '复用现有计算结果' : '未计算或结果已过期') + '。0 ERROR 仍需结合检查范围及警告复核。';
+        const severity = $('#validation-severity').value, rule = $('#validation-rule').value;
+        const cable = $('#validation-cable').value.toLowerCase(), cabinet = $('#validation-cabinet').value.toLowerCase();
+        const rows = report.issues.filter(i => (!severity || i.severity === severity) && (!rule || i.rule_id === rule) && i.cable_number.toLowerCase().includes(cable) && (i.source + ' ' + i.target).toLowerCase().includes(cabinet));
+        $('#validation-results').innerHTML = ['电缆问题', '端子问题', '映射问题', '路径问题', '数据完整性问题'].map(category => {
+            const selected = rows.filter(i => i.category === category);
+            return '<h3>' + esc(category) + '（显示 ' + selected.length + ' / 共 ' + report.categories[category] + '）</h3>' + (selected.length ? table(['程度 / 规则', '电缆 / 端子', '起点 → 终点', '问题 / 原始证据', '处理建议'], selected.map(i => [esc(i.severity + ' / ' + i.rule_id), esc(i.cable_number || '—') + '<br>' + esc(i.terminal_number || '—'), esc(i.source) + ' → ' + esc(i.target), esc(i.message) + '<br><small>' + esc(i.entity_id) + '</small><details><summary>查看原始证据</summary><pre style="white-space:pre-wrap">' + esc(JSON.stringify(i.evidence, null, 2)) + '</pre></details>', esc(i.suggestion)])) : '<p class="muted">无符合筛选条件的问题</p>');
+        }).join('');
+    }
+    function rules() {
+        $('#validation-rule').innerHTML = '<option value="">全部规则</option>' + (report?.rules || []).map(r => '<option value="' + esc(r.rule_id) + '">' + esc(r.rule_id + ' ' + r.name) + '</option>').join('');
+    }
+    for (const id of ['validation-severity', 'validation-rule', 'validation-cable', 'validation-cabinet']) $('#' + id).oninput = draw;
+    $('#run-validation').onclick = () => action(async () => {
+        report = await api('/projects/' + projectId + '/validation', 'POST', {});
+        if (current?.id !== projectId || page !== 'validation') return;
+        await reload();
+        rules(); draw(); notify('项目检查完成，报告已保存');
+    });
+    rules(); draw();
+}
+
 async function boot() {
     const state = await api('/session');
     csrf = state.csrf;
@@ -132,6 +170,7 @@ async function render() {
     if (page === 'aliases') await aliases(c);
     if (page === 'terminal') await terminal(c);
     if (page === 'issues') issues(c);
+    if (page === 'validation') await projectValidation(c);
     if (page === 'outputs') outputs(c);
     if (page === 'guide') guide(c);
 }

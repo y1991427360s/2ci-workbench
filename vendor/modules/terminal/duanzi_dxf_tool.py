@@ -242,7 +242,7 @@ def parse_coordinate_terminals(text: str):
     return blocks, errors
 
 
-def parse_terminals(text: str):
+def parse_terminals(text: str, *, preserve_duplicates: bool = False):
     """一块端子排一行：第一项是名称，其余是端子号。
     整段用顿号连着粘过来也认：中途遇到像端子排名称的项就自动开下一块。
     同一个名称分成几段写（厂家图里一条端子排画成两截）会自动接成一块，按出现顺序续端子号。"""
@@ -290,7 +290,8 @@ def parse_terminals(text: str):
                 kept.append(number)
         if repeated:
             errors.append("端子排「%s」里这些端子号出现了不止一次：%s" % (block["name"], "、".join(repeated)))
-        block["terminals"] = kept
+        if not preserve_duplicates:
+            block["terminals"] = kept
     if not blocks and not errors:
         errors.append("上面的端子排还没填")
     return blocks, errors

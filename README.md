@@ -29,6 +29,35 @@ python -m unittest test_duanzi_dxf_tool test_terminal_service
 
 网页端集成验收覆盖登录/CSRF、输入上传、直线 10m + 7m 余量、源清册哈希不变、路径 HTML、两份 DXF 回读、端子保存、工程隔离、ZIP 备份、非法路径与参数拒绝。
 
+## 二次设计项目一致性检查 V2
+
+进入“项目检查”，点击“运行项目检查”。统一规则位于 `validation/engine.py`，文件适配及报告服务位于 `validation/service.py`；Flask 仅负责权限、工程定位和调用，前端仅展示及筛选。支持 ERROR / WARNING / INFO、规则、电缆号和柜名组合筛选；每条问题包含工程、对象位置、原始数据证据及处理建议。
+
+报告保存在每个工程的 `outputs/reports/validation.json` 和 `validation.md`，成组原子替换，保留输入。GET `/api/projects/<id>/validation` 读取最近报告，POST 执行检查。输入内容或路径计算结果变化后，最近报告标记为过期；旧报告仍保留直到成功生成新报告。
+
+清册支持唯一 XLSX（表头至少“电缆编号、起点、终点”，型号规格列可选），或上传 UTF-8 BOM / GBK / UTF-16 的 `电缆清册.csv`（“电缆编号,起点,终点,规格”）。CSV 清册目前用于一致性检查，长度计算仍沿用 XLSX。多份候选清册视为歧义，不静默选取其中一份。
+
+原 `端子排.txt`、`接线.txt` 和 `settings.json` 继续使用。TXT 采用已有出图解析器，按默认前缀自动生成电缆号，不能推断原工程真实电缆编号，也只包含一个柜侧；报告明确显示这一覆盖限制。解析失败和不存在端子引用列入 D002，不静默忽略。
+
+需要真实电缆号及两侧检查时，在工程总览上传 `端子数据.csv`，必需表头如下，每行是一个物理端子声明：
+
+```csv
+terminal_strip,terminal_number,cable_number,source_cabinet,target_cabinet,circuit_number,external
+X,1,C1,1#保护柜,35kV开关柜,K1,true
+X,1,C1,35kV开关柜,1#保护柜,K1,true
+X,2,,1#保护柜,,,false
+```
+
+`source_cabinet` 始终表示端子所在柜，`target_cabinet` 表示接线对侧；允许清册与对侧端子记录方向相反。可选字段：`circuit_number`、`left_circuit`、`right_circuit`、`external`、`valid_connection`。存在电缆号或目标柜时按外部接线处理；备用端子无连接时会提示孤立端子 WARNING。CSV 存在时，项目检查优先使用 CSV，TXT 仍用于原出图流程，两者不会自动同步。柜名经现有空白/全角规范化及显式别名映射后比较，英文大小写不产生冲突；原值保留在 evidence。
+
+规则及模型边界见 [validation-v2.md](docs/validation-v2.md)。可重复执行真实 API 验收：
+
+```powershell
+.\.venv\Scripts\python.exe scripts/accept_validation.py
+```
+
+验收会创建正常、故障两个隔离工程，上传 XLSX 和端子 CSV，确认正常工程 0 ERROR，以及重复电缆、起终点冲突、孤立端子、不存在电缆引用全部检出。工程与报告保留在 `outputs/acceptance/`，不写入生产 `DATA_DIR`。
+
 ## 服务器
 
 源码 `/home/ubuntu/2ci-workbench`，数据 `/home/ubuntu/2ci-data`，服务 `2ci.service`，监听 `127.0.0.1:8029`。nginx 本机 TLS `9529`，443 SNI 对 `2ci.sen666.com` 转发至该端口，其他站点沿用原分流。Cloudflare 对该子域名单独设 SSL Strict，原 zone 模式保持不变。证书通过 DNS-01 申请。

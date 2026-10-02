@@ -28,6 +28,7 @@ from cable_stat.params import PARAM_SPECS, load_params, save_params
 from cable_stat.visual import write_visualization_files
 from modules.terminal.service import TerminalService
 from modules.terminal.duanzi_dxf_tool import EXAMPLE_TERMINALS, EXAMPLE_WIRING, EXAMPLE_CABINET
+from validation import run_project, read_report
 
 app = Flask(__name__, static_folder="static")
 app.config.update(SECRET_KEY=os.environ.get("SECRET_KEY") or secrets.token_hex(32),
@@ -109,7 +110,7 @@ def project(pid):
     if not re.fullmatch(r"[a-f0-9]{16}", pid):
         abort(404)
     path = ROOT / pid
-    if not (path / "project.json").is_file():
+    if path.is_symlink() or not path.resolve().is_relative_to(ROOT.resolve()) or not (path / "project.json").is_file():
         abort(404)
     return path
 
@@ -145,7 +146,12 @@ def create():
         abort(400, "请输入工程名称（最多100字）")
     with lock:
         path = ROOT / secrets.token_hex(8)
-        shutil.copytree(BASE / "vendor" / "项目模板" / "data", path / "data")
+        template = BASE / "vendor" / "项目模板" / "data"
+        if template.is_dir():
+            shutil.copytree(template, path / "data")
+        else:
+            # Empty template directories are not tracked by Git; a fresh clone must still work.
+            (path / "data").mkdir(parents=True)
         (path / "project.json").write_text(json.dumps({"name": name}, ensure_ascii=False), encoding="utf-8")
         return describe(path), 201
 
@@ -189,9 +195,13 @@ def upload(pid):
                 target = input_target(path, name)
                 if not target:
                     abort(400, "不支持的输入文件：" + name)
+                if target in staged:
+                    abort(400, "上传包含多个同名输入，请每次导入一个工程")
                 staged[target] = blob
         if not staged:
             abort(400, "没有找到可导入的工程输入文件")
+        for target in staged:
+            file_path(path, target.relative_to(path))
         # Stage every file before replacing, keeping a backup for rollback.
         originals = {p: p.read_bytes() if p.exists() else None for p in staged}
         try:
@@ -211,6 +221,10 @@ def upload(pid):
 
 
 def input_target(path, name):
+    if name in {"电缆清册.csv"}:
+        return path / "data" / name
+    if name == "端子数据.csv":
+        return path / "data" / "terminal" / name
     if name.lower().endswith(".xlsx") and not name.startswith("~$"):
         return path / name
     aliases = {"cabinets.csv": "柜子坐标.csv", "route_segments.csv": "路径线段.csv", "shafts.csv": "竖井.csv"}
@@ -282,6 +296,13 @@ def terminal(pid):
         if request.method == "PUT":
             service.save_state(request.json)
         return service.load_state()
+
+
+@app.route("/api/projects/<pid>/validation", methods=["GET", "POST"])
+def validation(pid):
+    with lock:
+        path = project(pid)
+        return jsonify(run_project(path) if request.method == "POST" else read_report(path))
 
 
 @app.post("/api/projects/<pid>/terminal/<action>")
