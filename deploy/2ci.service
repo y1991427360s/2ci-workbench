@@ -1,0 +1,18 @@
+[Unit]
+Description=Electrical Secondary Design Workbench
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/2ci-workbench
+EnvironmentFile=/home/ubuntu/2ci-workbench/.env
+Environment=TZ=Asia/Shanghai
+ExecStart=/home/ubuntu/2ci-workbench/.venv/bin/gunicorn --workers 1 --threads 4 --timeout 300 --bind 127.0.0.1:8029 app:app
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

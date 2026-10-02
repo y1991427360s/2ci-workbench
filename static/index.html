@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>电气二次设计工作台 · 网页版</title>
+    <meta name="theme-color" content="#090d16" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+    <link rel="alternate icon" href="/static/favicon.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <script>
+    (function() {
+        const saved = localStorage.getItem('sen_tools_theme');
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        if (saved === 'dark' || (!saved && prefersDark)) {
+            document.documentElement.classList.add('dark');
+        }
+    })();
+    </script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- 登录模块 -->
+    <div id="login" class="login">
+        <form id="login-form">
+            <div class="mark">⚡</div>
+            <p class="eyebrow">SECONDARY ENGINEERING / 2CI</p>
+            <h1>电气二次<br>设计工作台</h1>
+            <p class="muted">从清册到路径，从端子到接线。</p>
+            <label>
+                工作台访问密码
+                <input id="password" type="password" autocomplete="current-password" placeholder="请输入工作台密码" required>
+            </label>
+            <button class="primary" type="submit">进入工作台 →</button>
+            <p id="login-error" role="alert"></p>
+        </form>
+    </div>
+
+    <!-- 工作区主体 -->
+    <div id="workspace" hidden>
+        <!-- 侧边导航栏 -->
+        <aside>
+            <div class="brand">
+                <span class="mark">⚡</span>
+                <div>
+                    电气二次
+                    <small>设计工作台 · WEB</small>
+                </div>
+            </div>
+
+            <div class="project-picker">
+                <label>当前工程
+                    <select id="projects"></select>
+                </label>
+                <button id="new-project" type="button">＋ 新建工程</button>
+            </div>
+
+            <nav>
+                <button data-page="terminal"><span>01</span>端子排出图</button>
+                <button data-page="overview" class="active"><span>02</span>工程总览</button>
+                <button data-page="cables"><span>03</span>电缆统计</button>
+                <button data-page="params"><span>04</span>计算参数</button>
+                <button data-page="aliases"><span>05</span>柜名匹配</button>
+                <button data-page="issues"><span>06</span>问题清单</button>
+                <button data-page="outputs"><span>07</span>输出文件</button>
+                <button data-page="guide"><span>08</span>CAD 数据导出</button>
+            </nav>
+
+            <div class="aside-footer">
+                <div><span class="status-dot"></span>工程数据保存于服务器</div>
+                <button id="logout" type="button">退出登录 ↗</button>
+            </div>
+        </aside>
+
+        <!-- 主内容视口 -->
+        <main>
+            <header>
+                <div class="header-left">
+                    <p class="eyebrow">SECONDARY DESIGN WORKBENCH</p>
+                    <h1 id="page-title">工程总览</h1>
+                </div>
+                <div class="header-controls">
+                    <div class="nav-status-badge">已连接服务</div>
+                    <button id="themeToggle" class="theme-btn" type="button" aria-label="切换浅色/深色模式">
+                        <span id="themeIcon">🌓</span>
+                        <span id="themeText">模式</span>
+                    </button>
+                    <a id="export" class="button" href="#">↓ 备份工程</a>
+                </div>
+            </header>
+
+            <div id="toast" role="status" hidden></div>
+            <section id="content"></section>
+
+            <footer>
+                <div>2CI / 电气二次设计工作台</div>
+                <span>复用原版计算与绘图核心 · 生产环境就绪</span>
+            </footer>
+        </main>
+    </div>
+
+    <!-- 新建工程模态框 -->
+    <dialog id="create-dialog">
+        <form method="dialog" id="create-form">
+            <p class="eyebrow">NEW PROJECT</p>
+            <h2>新建工程</h2>
+            <label>
+                工程名称
+                <input id="project-name" required maxlength="100" placeholder="例如：110kV 变电站二次设计">
+            </label>
+            <div class="actions">
+                <button type="button" id="cancel-create">取消</button>
+                <button class="primary" type="submit">创建工程</button>
+            </div>
+        </form>
+    </dialog>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
