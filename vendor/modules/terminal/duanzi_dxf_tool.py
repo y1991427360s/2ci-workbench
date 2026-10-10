@@ -853,23 +853,20 @@ def generate(payload: dict) -> dict:
     folder = Path(payload["outputDir"]) if payload.get("outputDir") else desktop_dir()
     base = safe_name(cabinet) + "-端子排" if cabinet else "端子排"
     target = folder / (base + ".dxf")
-    wiring_target = folder / (base + "-仅接线.dxf")
     try:
-        result = build_dxf(params, DRAWING, target, wiring_target)
+        result = build_dxf(params, DRAWING, target)
     except OSError:
         # 同名图多半正开在 CAD 里被占用，换带时间戳的新名字再写一次。
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         target = folder / ("%s-%s.dxf" % (base, stamp))
-        wiring_target = folder / ("%s-%s-仅接线.dxf" % (base, stamp))
         try:
-            result = build_dxf(params, DRAWING, target, wiring_target)
+            result = build_dxf(params, DRAWING, target)
         except OSError as error:
             return {"ok": False, "errors": ["无法写入 %s：%s" % (folder, error)],
                     "parsed": describe_blocks(blocks, with_numbers=True)}
     return {
         "ok": True,
         "path": str(target),
-        "wiringPath": str(wiring_target),
         "folder": str(target.parent),
         "verify": verify(target, DRAWING),
         "warnings": duplicate_terminal_warnings(blocks) + warnings + result["skipped"],

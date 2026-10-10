@@ -2,7 +2,7 @@
 
 [桌面版 cad-cable-stat](https://github.com/y1991427360s/cad-cable-stat) 的独立 Web 版本，部署目标为 9 号服务器与 https://2ci.sen666.com 。
 
-支持工程创建及 ZIP 导入/备份、XLSX/CSV 上传、电缆长度计算、参数编辑、柜名映射、二维/三维路径复核、端子检查、逐排方向设置、完整与仅接线 DXF 下载、问题清单和 CAD 向导下载。原始清册不被覆盖。
+支持工程创建及 ZIP 导入/备份、XLSX/CSV 上传、电缆长度计算、参数编辑、柜名映射、二维/三维路径复核、端子检查、逐排方向设置、清除所有端子输入、完整端子排 DXF 下载、问题清单和 CAD 向导下载。原始清册不被覆盖。
 
 `vendor/` 保存原版计算、绘图和工程存储核心，网页适配位于 `app.py`，界面位于 `static/`。工程保存在 `DATA_DIR` 指定目录，每个工程独立一个随机 ID 文件夹，沿用 `data/` 与 `outputs/` 格式。ZIP 导入只导入业务输入，不导入旧成果。网页端不直接操作本机 CAD；在 CAD 导出 CSV 后上传。
 
@@ -27,7 +27,7 @@ python -m test_calculate_cable_lengths
 python -m unittest test_duanzi_dxf_tool test_terminal_service
 ```
 
-网页端集成验收覆盖登录/CSRF、输入上传、直线 10m + 7m 余量、源清册哈希不变、路径 HTML、两份 DXF 回读、端子保存、工程隔离、ZIP 备份、非法路径与参数拒绝。
+网页端集成验收覆盖登录/CSRF、输入上传、直线 10m + 7m 余量、源清册哈希不变、路径 HTML、完整 DXF 回读与历史仅接线成果隐藏、端子保存、工程隔离、ZIP 备份、非法路径与参数拒绝。
 
 ## 二次设计项目一致性检查 V2
 

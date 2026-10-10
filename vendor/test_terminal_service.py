@@ -182,14 +182,15 @@ class TerminalServiceTests(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.assertEqual({"坐标列-1": "DOWN", "坐标列-2": "UP"}, seen[0]["directions"])
 
-    def test_generate_two_valid_drawings_only_inside_current_project(self):
+    def test_generate_one_valid_drawing_only_inside_current_project(self):
         outside = Path(self.temporary.name) / "不允许的输出"
         result = self.service.generate(self.payload(outputDir=str(outside)))
         self.assertTrue(result["ok"], result)
         self.assertEqual(self.service.output_dir / "保护柜-端子排.dxf", Path(result["path"]))
-        self.assertEqual(self.service.output_dir / "保护柜-端子排-仅接线.dxf", Path(result["wiringPath"]))
+        self.assertNotIn("wiringPath", result)
+        self.assertEqual([Path(result["path"])], list(self.service.output_dir.glob("*.dxf")))
         self.assertFalse(outside.exists())
-        for path in (result["path"], result["wiringPath"]):
+        for path in (result["path"],):
             self.assertGreater(Path(path).stat().st_size, 0)
             doc = ezdxf.readfile(path)
             self.assertFalse(doc.audit().has_errors)

@@ -551,8 +551,8 @@ class DirectionTests(unittest.TestCase):
         self.assertAlmostEqual(cable_y + 0.5, labels["UPS-12"].dxf.insert.y)
 
 
-class WiringOnlyExportTests(unittest.TestCase):
-    def test_generated_pair_preserves_wiring_and_locks_only_background(self):
+class FullDrawingExportTests(unittest.TestCase):
+    def test_full_drawing_preserves_wiring_and_locks_only_background(self):
         terminals = "100,100 X 端子名\n100,95 1\n100,90 2\n200,100 X2 端子名\n200,95 1"
         strips = parse_strips(terminals)
         self.assertEqual(2, len(strips))
@@ -564,7 +564,8 @@ class WiringOnlyExportTests(unittest.TestCase):
             })
             self.assertTrue(result["ok"], result)
             full = ezdxf.readfile(result["path"])
-            wiring = ezdxf.readfile(result["wiringPath"])
+            self.assertNotIn("wiringPath", result)
+            self.assertEqual([Path(result["path"])], list(Path(folder).glob("*.dxf")))
             allowed = {DRAWING["layers"][role] for role in ("principle", "wire", "label")}
             for role in ("frame", "text", "title"):
                 layer = full.layers.get(DRAWING["layers"][role])
@@ -573,24 +574,22 @@ class WiringOnlyExportTests(unittest.TestCase):
                 self.assertFalse(layer.is_frozen())
             for layer in allowed:
                 self.assertFalse(full.layers.get(layer).is_locked())
-                self.assertFalse(wiring.layers.get(layer).is_locked())
-            expected = [e for e in full.modelspace() if e.dxf.layer in allowed]
-            actual = list(wiring.modelspace())
+            actual = [e for e in full.modelspace() if e.dxf.layer in allowed]
             self.assertTrue(actual)
-            self.assertEqual([e.dxfattribs() for e in expected], [e.dxfattribs() for e in actual])
             self.assertEqual(allowed, {e.dxf.layer for e in actual})
             self.assertEqual({"A610", "B903", "701"}, {
                 e.dxf.text for e in actual if e.dxf.layer == DRAWING["layers"]["principle"]})
             self.assertTrue(all(e.dxf.width == 0.7 and e.dxf.style == "HZ"
-                                for e in wiring.modelspace().query("TEXT")))
+                                for e in full.modelspace().query("TEXT")))
             self.assertFalse(full.audit().has_errors)
-            self.assertFalse(wiring.audit().has_errors)
 
-    def test_no_connections_produces_empty_wiring_file(self):
+    def test_no_connections_still_produces_full_terminal_drawing(self):
         with TemporaryDirectory() as folder, patch("modules.terminal.duanzi_dxf_tool.desktop_dir", return_value=Path(folder)):
             result = generate({"terminals": "ZD、1、2", "wiring": ""})
             self.assertTrue(result["ok"])
-            self.assertEqual(0, len(ezdxf.readfile(result["wiringPath"]).modelspace()))
+            self.assertNotIn("wiringPath", result)
+            self.assertEqual(1, len(list(Path(folder).glob("*.dxf"))))
+            self.assertGreater(len(ezdxf.readfile(result["path"]).modelspace()), 0)
 
 
 class MixedFormatRejectionTests(unittest.TestCase):
@@ -679,7 +678,8 @@ class OutputTests(unittest.TestCase):
                 result = generate({"terminals": "ZD、1", "wiring": "", "outputDir": folder})
             self.assertTrue(result["ok"])
             self.assertNotEqual(calls[0], calls[1])
-            self.assertTrue(Path(result["wiringPath"]).name.endswith("-仅接线.dxf"))
+            self.assertNotIn("wiringPath", result)
+            self.assertEqual([Path(result["path"])], list(Path(folder).glob("*.dxf")))
             with patch("modules.terminal.duanzi_dxf_tool.build_dxf", side_effect=PermissionError("locked")):
                 result = generate({"terminals": "ZD、1", "wiring": "", "outputDir": folder})
             self.assertFalse(result["ok"])

@@ -274,7 +274,7 @@ function terminalPayload() {
 async function terminal(c) {
     const state = await api('/projects/' + current.id + '/terminal');
     current.terminalMemory = state.directionMemory;
-    c.innerHTML = '<div class="panel"><div class="terminal-toolbar"><label>柜名<input id="cabinet" value="' + esc(state.cabinet) + '" placeholder="请输入柜名，用于图签与文件名"></label><label>默认电缆方向<select id="direction"><option>向下</option><option>向上</option></select></label></div><div class="grid"><div><div class="editor-label"><strong>端子排定义</strong><span>普通 / CAD 坐标格式</span></div><textarea id="terminals" spellcheck="false" placeholder="X、1、2、3">' + esc(state.terminals) + '</textarea><input type="file" id="terminal-import" accept=".txt" style="margin-top:10px"><small class="muted" style="display:block;margin-top:4px">支持导入 UTF-8、GBK 或 UTF-16 TXT 文件</small></div><div><div class="editor-label"><strong>接线信息</strong><span>端子引用、原理号、去向柜</span></div><textarea id="wiring" spellcheck="false" placeholder="X:1、A610、甲柜">' + esc(state.wiring) + '</textarea><input type="file" id="wiring-import" accept=".txt" style="margin-top:10px"></div></div><div class="actions"><button id="inspect">🔍 检查输入 · F5</button><button class="primary" id="generate">⚡ 生成 DXF · Ctrl+Enter</button><button id="save-terminal">保存输入</button><button id="example">填入示例</button></div><p class="muted" id="save-status">切换页面和工程时自动保存。完整图与仅接线图坐标保持精确对齐。</p><div id="terminal-result"></div><div id="directions"></div></div>';
+    c.innerHTML = '<div class="panel"><div class="terminal-toolbar"><label>柜名<input id="cabinet" value="' + esc(state.cabinet) + '" placeholder="请输入柜名，用于图签与文件名"></label><label>默认电缆方向<select id="direction"><option>向下</option><option>向上</option></select></label></div><div class="grid"><div><div class="editor-label"><strong>端子排定义</strong><span>普通 / CAD 坐标格式</span></div><textarea id="terminals" spellcheck="false" placeholder="X、1、2、3">' + esc(state.terminals) + '</textarea><input type="file" id="terminal-import" accept=".txt" style="margin-top:10px"><small class="muted" style="display:block;margin-top:4px">支持导入 UTF-8、GBK 或 UTF-16 TXT 文件</small></div><div><div class="editor-label"><strong>接线信息</strong><span>端子引用、原理号、去向柜</span></div><textarea id="wiring" spellcheck="false" placeholder="X:1、A610、甲柜">' + esc(state.wiring) + '</textarea><input type="file" id="wiring-import" accept=".txt" style="margin-top:10px"></div></div><div class="actions"><button id="inspect">🔍 检查输入 · F5</button><button class="primary" id="generate">⚡ 生成 DXF · Ctrl+Enter</button><button id="save-terminal">保存输入</button><button id="example">填入示例</button><button id="clear-terminal" type="button">清除所有输入</button></div><p class="muted" id="save-status">切换页面和工程时自动保存。生成完整端子排 DXF 图纸。</p><div id="terminal-result"></div><div id="directions"></div></div>';
     $('#direction').value = state.direction;
     ['cabinet', 'terminals', 'wiring', 'direction'].forEach(id => $('#' + id).oninput = () => {
         dirty = true;
@@ -296,6 +296,21 @@ async function terminal(c) {
         for (const k of ['cabinet', 'terminals', 'wiring']) $('#' + k).value = x[k];
         dirty = true;
         $('#save-status').textContent = '示例已填入，尚未保存';
+    });
+    $('#clear-terminal').onclick = () => action(async () => {
+        if (!confirm('确定清除当前工程的所有端子输入吗？柜名、端子排定义、接线信息及方向设置将清空，已有生成文件保留。')) return;
+        const empty = { cabinet: '', terminals: '', wiring: '', direction: '向下', directionMemory: {} };
+        await api('/projects/' + current.id + '/terminal', 'PUT', empty);
+        for (const id of ['cabinet', 'terminals', 'wiring', 'terminal-import', 'wiring-import']) $('#' + id).value = '';
+        $('#direction').value = empty.direction;
+        current.terminalMemory = {};
+        current.terminalIssues = [];
+        $('#terminal-result').innerHTML = '';
+        $('#directions').innerHTML = '';
+        dirty = false;
+        $('#save-status').textContent = '所有端子输入已清除并保存，可以输入新的内容';
+        notify('所有端子输入已清除');
+        $('#cabinet').focus();
     });
     for (const [id, target] of [['terminal-import', 'terminals'], ['wiring-import', 'wiring']]) {
         $('#' + id).onchange = () => action(async () => {
@@ -336,7 +351,7 @@ async function terminal(c) {
                 await reload();
                 current.terminalIssues = issues;
                 current.terminalMemory = memory;
-                const files = current.outputs.filter(f => f.name.endsWith('.dxf'));
+                const files = current.outputs.filter(f => f.name.endsWith('.dxf') && !f.name.endsWith('-仅接线.dxf'));
                 $('#terminal-result').innerHTML += '<div class="actions">' + files.map(f => '<a class="button primary" href="' + link(f.name) + '">↓ 下载 ' + esc(f.name.split('/').pop()) + '</a>').join('') + '</div>';
             }
             notify(r.ok ? (actionName === 'generate' ? 'DXF 已生成，可以下载' : '输入检查通过') : '请修正输入后重试', !r.ok);

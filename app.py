@@ -129,7 +129,8 @@ def describe(path):
             "workbook_error": status.workbook_error, "files": [asdict(f) for f in status.files],
             "outdated": status.result_outdated, "missing": status.missing_required,
             "outputs": [{"name": p.relative_to(path).as_posix(), "size": p.stat().st_size}
-                        for p in sorted((path / "outputs").rglob("*")) if p.is_file()],
+                        for p in sorted((path / "outputs").rglob("*"))
+                        if p.is_file() and not p.name.endswith("-仅接线.dxf")],
             "result": json.loads((path / "result.json").read_text(encoding="utf-8")) if (path / "result.json").exists() else None}
 
 

@@ -76,9 +76,16 @@ class WebTests(unittest.TestCase):
         result = self.call('/projects/'+pid+'/terminal/generate', 'POST', example)
         self.assertTrue(result.json['ok'], result.json)
         files = list((web.ROOT/pid/'outputs'/'端子排').glob('*.dxf'))
-        self.assertEqual(len(files), 2)
+        self.assertEqual(len(files), 1)
+        self.assertNotIn("wiringPath", result.json)
+        self.assertFalse(any(f.name.endswith("-仅接线.dxf") for f in files))
         for f in files:
             self.assertGreater(len(ezdxf.readfile(f).modelspace()), 0)
+        legacy = files[0].with_name("旧端子排-仅接线.dxf")
+        legacy.write_bytes(files[0].read_bytes())
+        visible = self.call('/projects/'+pid).json['outputs']
+        self.assertFalse(any(f['name'].endswith('-仅接线.dxf') for f in visible))
+        self.assertTrue(any(f['name'].endswith('.dxf') for f in visible))
         restored = self.call('/projects/'+pid+'/terminal').json
         self.assertEqual(restored['terminals'], example['terminals'])
         backup = self.call('/projects/'+pid+'/export')
