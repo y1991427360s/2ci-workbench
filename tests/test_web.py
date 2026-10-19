@@ -76,9 +76,16 @@ class WebTests(unittest.TestCase):
         result = self.call('/projects/'+pid+'/terminal/generate', 'POST', example)
         self.assertTrue(result.json['ok'], result.json)
         files = list((web.ROOT/pid/'outputs'/'端子排').glob('*.dxf'))
-        self.assertEqual(len(files), 2)
+        self.assertEqual(len(files), 1)
+        self.assertNotIn("wiringPath", result.json)
+        self.assertFalse(any(f.name.endswith("-仅接线.dxf") for f in files))
         for f in files:
             self.assertGreater(len(ezdxf.readfile(f).modelspace()), 0)
+        legacy = files[0].with_name("旧端子排-仅接线.dxf")
+        legacy.write_bytes(files[0].read_bytes())
+        visible = self.call('/projects/'+pid).json['outputs']
+        self.assertFalse(any(f['name'].endswith('-仅接线.dxf') for f in visible))
+        self.assertTrue(any(f['name'].endswith('.dxf') for f in visible))
         restored = self.call('/projects/'+pid+'/terminal').json
         self.assertEqual(restored['terminals'], example['terminals'])
         backup = self.call('/projects/'+pid+'/export')
@@ -99,6 +106,35 @@ class WebTests(unittest.TestCase):
         values = self.call('/projects/'+pid+'/params').json['values']
         values['CAD每米单位'] = 0
         self.assertEqual(self.call('/projects/'+pid+'/params', 'PUT', values).status_code, 400)
+
+    def test_cad_wizard_lisp_is_loadable_text(self):
+        raw = (Path(web.__file__).parent / 'static' / 'cad_cable_wizard.lsp').read_bytes()
+        self.assertEqual(raw.count(b'\n'), raw.count(b'\r\n'))
+        text = raw.decode('gbk')
+        depth, i = 0, 0
+        while i < len(text):
+            c = text[i]
+            if c == ';':
+                i = text.find('\n', i)
+                if i < 0:
+                    break
+            elif c == '"':
+                i += 1
+                while text[i] != '"':
+                    i += 2 if text[i] == '\\' else 1
+            elif c == '(':
+                depth += 1
+            elif c == ')':
+                depth -= 1
+                self.assertGreaterEqual(depth, 0)
+            i += 1
+        self.assertEqual(depth, 0)
+        self.assertNotIn("(vl-sort keyed", text)
+        self.assertNotIn('(entnext)', text)
+        response = self.client.get('/static/cad_cable_wizard.lsp')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, raw)
+        response.close()
 
 
 if __name__ == '__main__':

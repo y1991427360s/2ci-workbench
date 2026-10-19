@@ -2,13 +2,13 @@
 ;;; 只需 APPLOAD 本文件，然后输入 DDFD_CABLE_WIZARD，按提示一步步做即可。
 ;;;
 ;;; 包含以下命令:
-;;;   DDFD_CABLE_WIZARD        引导向导：建图层→标柜子→画路径→标竖井→导出并运行统计
+;;;   DDFD_CABLE_WIZARD        引导向导：建图层→标柜子→画路径→标竖井→导出到桌面
 ;;;   DDFD_CABLE_LAYERS        第1步：按楼层数自动创建 CABLE_* 图层
 ;;;   DDFD_CABLE_ROOMS         定义房间：给闭合多段线写房间名称（放到 CABLE_ROOM_nF）
 ;;;   DDFD_CABLE_CABINETS      第2步：逐个点柜子出线点并写柜名文字（柜名已标过会提醒）
 ;;;   DDFD_CABLE_ROUTES        第3步：沿电缆沟/桥架画走线路径（自动开端点捕捉）
 ;;;   DDFD_CABLE_SHAFTS        第4步：标跨楼层竖井（自动写 ZJn_楼层 配对文字）
-;;;   DDFD_CABLE_EXPORT_RUN    第5步：导出4个CSV到项目文件夹 data\，可直接运行统计
+;;;   DDFD_CABLE_EXPORT_RUN    第5步：自动导出4个CSV到桌面，回网页上传计算
 ;;;   DDFD_EXPORT_CABLE_ROUTE  仅导出4个CSV（与 cad_export_cable_route.lsp 相同）
 ;;;   DDFD_ROOM_CHECK          检查房间：列出将导出的房间，定位房间图层上未命名/无效的多段线
 ;;;   DDFD_CLEAN_ROOM_LAYERS   把房间图层上未命名的多段线移到 0 层（先确认，可 U 撤销）
@@ -25,7 +25,9 @@
 (vl-load-com)
 
 ;; 改动本文件时同步更新版本号，加载时会打印，便于确认 CAD 里用的是哪一版
-(setq *ddfd-cable-version* "2026-09-26")
+(setq *ddfd-cable-version* "2026-10-19-web-opt")
+;; 网页版工作台地址，第5步导出后可直接打开
+(setq *ddfd-web-url* "https://2ci.sen666.com/")
 
 ;;; ================= 通用与导出部分 =================
 ;; 本段原样复制到 cad_export_cable_route.lsp（python tools\lisp_test\sync_export_lsp.py），两份必须逐字一致。
@@ -323,7 +325,7 @@
   (entupd ename)
 )
 
-(defun ddfd-room-has-arc (ename / ent typ cur item found)
+(defun ddfd-room-has-arc (ename / ent typ cur vd item found)
   (setq ent (entget ename))
   (setq typ (cdr (assoc 0 ent)))
   (setq found nil)
@@ -334,8 +336,8 @@
     (if (= typ "POLYLINE")
       (progn
         (setq cur (entnext ename))
-        (while (and cur (= (cdr (assoc 0 (entget cur))) "VERTEX"))
-          (if (and (assoc 42 (entget cur)) (> (abs (cdr (assoc 42 (entget cur)))) 1e-9)) (setq found T))
+        (while (and (not found) cur (= (cdr (assoc 0 (setq vd (entget cur)))) "VERTEX"))
+          (if (and (assoc 42 vd) (> (abs (cdr (assoc 42 vd))) 1e-9)) (setq found T))
           (setq cur (entnext cur))
         )
       )
@@ -410,19 +412,31 @@
       (> (abs area) 1e-9))))
 
 ;; 扫描模型空间，返回 (房间图元表 CABLE_ROOM图层上未命名多段线句柄表 已命名但无效的句柄表)
-(defun ddfd-room-collect (/ ent ed layer rooms unnamed bad)
-  (setq ent (entnext))
-  (while ent
-    (setq ed (entget ent (list "DDFD_CABLE_ROOM"))
-          layer (cdr (assoc 8 ed)))
-    (if (and (member (cdr (assoc 0 ed)) '("LWPOLYLINE" "POLYLINE"))
-             (/= (cdr (assoc 67 ed)) 1))
-      (cond
-        ((ddfd-room-exportable-p ent) (setq rooms (cons ent rooms)))
-        ((assoc -3 ed) (setq bad (cons (cdr (assoc 5 ed)) bad)))
-        ((and layer (wcmatch (strcase layer) "CABLE_ROOM*"))
-         (setq unnamed (cons (cdr (assoc 5 ed)) unnamed)))))
-    (setq ent (entnext ent)))
+;; 用 ssget 过滤让 CAD 自己按类型/图层/XData/空间筛选，不再 entnext 逐个遍历全图（大图里快很多）：
+;;   第一次取带房间 XData 的多段线（不论图层），第二次取 CABLE_ROOM 图层上的多段线、跳过第一次已处理的；
+;;   第二次仍会检查 XData，个别 CAD 不支持 XData 过滤时，房间图层上的已命名房间也不会漏掉
+(defun ddfd-room-collect (/ named ss i ent ed rooms unnamed bad)
+  (if (setq named (ssget "_X" '((0 . "*POLYLINE") (-4 . "<NOT") (67 . 1) (-4 . "NOT>")
+                                (-3 ("DDFD_CABLE_ROOM")))))
+    (progn
+      (setq i 0)
+      (repeat (sslength named)
+        (setq ent (ssname named i) i (1+ i) ed (entget ent))
+        (if (member (cdr (assoc 0 ed)) '("LWPOLYLINE" "POLYLINE"))
+          (if (ddfd-room-exportable-p ent)
+            (setq rooms (cons ent rooms))
+            (setq bad (cons (cdr (assoc 5 ed)) bad)))))))
+  (if (setq ss (ssget "_X" '((0 . "*POLYLINE") (8 . "CABLE_ROOM*") (-4 . "<NOT") (67 . 1) (-4 . "NOT>"))))
+    (progn
+      (setq i 0)
+      (repeat (sslength ss)
+        (setq ent (ssname ss i) i (1+ i) ed (entget ent (list "DDFD_CABLE_ROOM")))
+        (if (and (member (cdr (assoc 0 ed)) '("LWPOLYLINE" "POLYLINE"))
+                 (not (and named (ssmemb ent named))))
+          (cond
+            ((not (assoc -3 ed)) (setq unnamed (cons (cdr (assoc 5 ed)) unnamed)))
+            ((ddfd-room-exportable-p ent) (setq rooms (cons ent rooms)))
+            (T (setq bad (cons (cdr (assoc 5 ed)) bad))))))))
   (list (reverse rooms) (reverse unnamed) (reverse bad)))
 
 ;; 在命令行按楼层列出要导出的房间，并提示同层重名、被跳过的多段线
@@ -519,23 +533,31 @@
   (princ (strcat "\n无法读取图元 " (cdr (assoc 5 (entget en))) " ("
                  (cdr (assoc 8 (entget en))) "): " (vl-catch-all-error-message result))))
 
-;; ssget "_X" 也会选到布局（图纸空间，67 组码为 1）里的图元，只导出模型空间的
-(defun ddfd-export-point-layer (pattern filename header / ss fh i en result ok)
+;; ssget "_X" 也会选到布局（图纸空间，67 组码为 1）里的图元：模型空间和图纸空间分两次 ssget，
+;; 由 CAD 直接过滤，图纸空间的只计数用于提示，不再逐个 entget 判断
+(defun ddfd-model-ss (pattern)
+  (ssget "_X" (list (cons 8 pattern) '(-4 . "<NOT") '(67 . 1) '(-4 . "NOT>"))))
+
+(defun ddfd-count-paper (pattern / ss)
+  (if (setq ss (ssget "_X" (list (cons 8 pattern) '(67 . 1))))
+    (ddfd-stat-add "PAPER" (sslength ss))))
+
+;; 逐个导出选择集里的图元，fn 的参数为 args 加上图元名；有图元出错就返回 nil（出错图元的句柄已打印）
+(defun ddfd-export-ss (ss fn args / i en result ok)
+  (setq ok T i 0)
+  (if ss
+    (repeat (sslength ss)
+      (setq en (ssname ss i) i (1+ i)
+            result (vl-catch-all-apply fn (append args (list en))))
+      (if (vl-catch-all-error-p result) (progn (ddfd-export-fail-message en result) (setq ok nil)))))
+  ok)
+
+(defun ddfd-export-point-layer (pattern filename header / fh ok)
   (if (setq fh (open filename "w"))
     (progn
-      (setq ok T)
       (ddfd-write-csv-row fh header)
-      (if (setq ss (ssget "_X" (list (cons 8 pattern))))
-        (progn
-          (setq i 0)
-          (while (< i (sslength ss))
-            (setq en (ssname ss i))
-            (if (= (cdr (assoc 67 (entget en))) 1)
-              (ddfd-stat-add "PAPER" (cdr (assoc 5 (entget en))))
-              (progn
-                (setq result (vl-catch-all-apply 'ddfd-export-point-row (list fh pattern en)))
-                (if (vl-catch-all-error-p result) (progn (ddfd-export-fail-message en result) (setq ok nil)))))
-            (setq i (1+ i)))))
+      (setq ok (ddfd-export-ss (ddfd-model-ss pattern) 'ddfd-export-point-row (list fh pattern)))
+      (ddfd-count-paper pattern)
       (close fh)
       ok)
     (progn (princ (strcat "\n无法写入文件: " filename)) nil)))
@@ -590,7 +612,7 @@
               (rtos (car p1) 2 6) (rtos (cadr p1) 2 6)
               (rtos (car p2) 2 6) (rtos (cadr p2) 2 6)
               (rtos (if len len (distance p1 p2)) 2 6) layer handle (itoa segno)))
-      (ddfd-stat-add "SEG" handle))))
+      (setq *ddfd-seg-count* (1+ *ddfd-seg-count*)))))
 
 ;; 一个路径图元写成若干段：LINE 一段；ARC 一段（圆心、半径、起止角都在 OCS 里，逆时针从起点角到终点角）；
 ;; 多段线每段一行、段号 1..n，闭合的最后一段从末点回到首点；网格/多面网格和其他图元不导出，记下来导出后提示
@@ -630,22 +652,12 @@
            (setq verts (cdr verts) k (1+ k))))))
     (ddfd-stat-add "UNSUPPORTED" (cons (if (= typ "POLYLINE") "POLYLINE网格" typ) handle))))
 
-(defun ddfd-export-routes (filename / ss fh i en result ok)
+(defun ddfd-export-routes (filename / fh ok)
   (if (setq fh (open filename "w"))
     (progn
-      (setq ok T)
       (ddfd-write-csv-row fh (list "路径编号" "楼层" "起点X" "起点Y" "终点X" "终点Y" "长度_CAD单位" "图层" "句柄" "段号"))
-      (if (setq ss (ssget "_X" (list (cons 8 "CABLE_ROUTE*"))))
-        (progn
-          (setq i 0)
-          (while (< i (sslength ss))
-            (setq en (ssname ss i))
-            (if (= (cdr (assoc 67 (entget en))) 1)
-              (ddfd-stat-add "PAPER" (cdr (assoc 5 (entget en))))
-              (progn
-                (setq result (vl-catch-all-apply 'ddfd-export-route-rows (list fh en)))
-                (if (vl-catch-all-error-p result) (progn (ddfd-export-fail-message en result) (setq ok nil)))))
-            (setq i (1+ i)))))
+      (setq ok (ddfd-export-ss (ddfd-model-ss "CABLE_ROUTE*") 'ddfd-export-route-rows (list fh)))
+      (ddfd-count-paper "CABLE_ROUTE*")
       (close fh)
       ok)
     (progn (princ (strcat "\n无法写入文件: " filename)) nil)))
@@ -678,7 +690,24 @@
         (T (atoi fl))))
 
 ;; 导出成功后按文件报数量，再提示柜名重复、空柜名、不支持的路径图元、看不出楼层的图层、布局里的图元
-(defun ddfd-export-summary (room-count / cabs floors keyed i prev run dups c empty unsup nofloor paper)
+;; 出现不止一次的名称，按名称排序、每个只列一次（区分大小写，与导出比较一致）。
+;; 中望 2026 的 vl-sort 带 lambda 对大表极慢，这里用原生 acad_strlsort 排序：按不分大小写的同名分段，
+;; 段内再用 member 找完全相同的；acad_strlsort 不可用时退回按出现次数计数
+(defun ddfd-dup-names (names / sorted run key s nm res)
+  (setq sorted (vl-catch-all-apply 'acad_strlsort (list names)))
+  (if (or (vl-catch-all-error-p sorted) (/= (length sorted) (length names)))
+    (foreach s (ddfd-count-items names) (if (> (cdr s) 1) (setq res (cons (car s) res))))
+    (foreach s (append sorted (list nil))
+      (if (and s run (= (strcase s) key))
+        (setq run (cons s run))
+        (progn
+          (foreach nm (reverse run)
+            (if (and (member nm (cdr (member nm run))) (not (member nm res)))
+              (setq res (cons nm res))))
+          (setq run (if s (list s)) key (if s (strcase s)))))))
+  (reverse res))
+
+(defun ddfd-export-summary (room-count / cabs floors prev run dups c empty unsup nofloor paper)
   (setq cabs (ddfd-stat-get "CAB")
         floors (vl-sort (ddfd-count-items (mapcar 'cadr cabs))
                         '(lambda (a b) (< (ddfd-floor-key (car a)) (ddfd-floor-key (car b))))))
@@ -690,21 +719,14 @@
                                       " / ")
                            "）")
                    "")
-                 "、路径线段 " (itoa (length (ddfd-stat-get "SEG"))) " 段"
+                 "、路径线段 " (itoa *ddfd-seg-count*) " 段"
                  "、竖井 " (itoa (length (ddfd-stat-get "SHAFT"))) " 个"
                  "、房间 " (itoa room-count) " 个。"))
-  ;; 柜名重复：按 (柜名 CSV行序) 排序后相邻同名的归成一组，组内句柄按 CSV 顺序，第一个就是 Python 统计时采用的
-  (setq i 0)
-  (foreach c cabs (setq keyed (cons (list (car c) i (caddr c)) keyed) i (1+ i)))
-  (foreach c (append (vl-sort keyed '(lambda (a b) (if (= (car a) (car b)) (< (cadr a) (cadr b)) (< (car a) (car b)))))
-                     (list nil))
-    (if (and prev c (= (car c) (car prev)))
-      (setq run (cons (caddr c) run))
-      (progn
-        (if (cdr run)
-          (setq dups (cons (strcat (car prev) "（句柄 " (ddfd-join (reverse run) "、") "）") dups)))
-        (setq run (if c (list (caddr c))))))
-    (setq prev c))
+  ;; 柜名重复：每组的句柄按 CSV 顺序，第一个就是 Python 统计时采用的
+  (foreach c (ddfd-dup-names (mapcar 'car cabs))
+    (setq run nil)
+    (foreach prev cabs (if (= (car prev) c) (setq run (cons (caddr prev) run))))
+    (setq dups (cons (strcat c "（句柄 " (ddfd-join (reverse run) "、") "）") dups)))
   (if dups
     (princ (strcat "\n注意：柜名重复 " (itoa (length dups)) " 个，统计时只用每组第一个句柄的坐标，请改名或删掉多余的："
                    (ddfd-join-limit (reverse dups) "；" 10))))
@@ -722,7 +744,7 @@
     (princ (strcat "\n注意：这些图层名看不出楼层（应以 _1F、_B1F 这类结尾），导出的楼层列为空："
                    (ddfd-join (mapcar '(lambda (p) (strcat (car p) "（" (itoa (cdr p)) " 个图元）")) nofloor) "、"))))
   (if (setq paper (ddfd-stat-get "PAPER"))
-    (princ (strcat "\n提示：布局（图纸空间）里有 " (itoa (length paper))
+    (princ (strcat "\n提示：布局（图纸空间）里有 " (itoa (apply '+ paper))
                    " 个 CABLE_* 图元，只导出模型空间的，已忽略。")))
   (princ))
 
@@ -731,7 +753,11 @@
   (setq names '("柜子坐标.csv" "路径线段.csv" "竖井.csv" "房间范围.csv") ok T)
   ;; Refuse an unfinished previous transaction instead of overwriting its backup.
   (foreach fn names
-    (if (findfile (strcat outdir fn ".previous")) (setq ok nil)))
+    (if (findfile (strcat outdir fn ".previous"))
+      (progn
+        (setq ok nil)
+        (princ (strcat "\n上次导出没有完成，留下了备份 " outdir fn ".previous；"
+                       "请确认其中没有需要的数据后删除或改名，再重新导出。")))))
   (foreach fn names
     (if ok
       (progn
@@ -761,7 +787,8 @@
 
 ;; 房间可以没有（导出空的 房间范围.csv）；房间列表在导出前打印，便于当场核对。
 ;; *ddfd-export-stats* 是局部变量（动态作用域），导出函数记下的数量只在本次导出里有效
-(defun ddfd-do-export (outdir / info rooms result names fn *ddfd-export-stats*)
+(defun ddfd-do-export (outdir / info rooms result names fn *ddfd-export-stats* *ddfd-seg-count*)
+  (setq *ddfd-seg-count* 0)
   (setq info (ddfd-room-collect))
   (ddfd-room-report info)
   (setq rooms (if (car info) (car info) 'NO-ROOMS))
@@ -781,7 +808,10 @@
               (princ (strcat "\n已导出四个CSV（汇总提示出错: " (vl-catch-all-error-message result) "）")))
             T)
           (progn
-            (princ "\n提交失败，请检查文件占用或 .previous 备份。")
+            (princ "\n提交失败：请关闭正在用 Excel/WPS 打开的这几个CSV，或按上面的提示处理 .previous 备份后重试。")
+            (foreach fn '("柜子坐标.csv" "路径线段.csv" "竖井.csv" "房间范围.csv")
+              (if (findfile (strcat outdir fn ".pending"))
+                (vl-file-delete (strcat outdir fn ".pending"))))
             nil))
         (progn
           (if (vl-catch-all-error-p result)
@@ -807,7 +837,7 @@
   (if (ddfd-do-export outdir)
     (progn
       (princ (strcat "\n已导出到：" outdir))
-      (princ "\n请把四个CSV复制到项目 data 文件夹。")))
+      (princ "\n请在网页版“电缆统计”中上传这四个CSV（桌面版则复制到项目 data 文件夹）。")))
   (princ)
 )
 
@@ -1009,26 +1039,37 @@
   (princ)
 )
 
-;; 模型空间里柜子图层上已经用了这个柜名的图元，返回 ((句柄 . 图层) ...)；比较时和导出一样按去掉空格后的柜名
-(defun ddfd-wiz-find-cabinet (nm / key ss i en ed res)
-  (setq key (ddfd-remove-spaces (ddfd-text-plain nm)))
-  (if (and (/= key "") (setq ss (ssget "_X" '((8 . "CABLE_CABINET*")))))
+;; 柜名索引：模型空间柜子图层上全部图元的 ((去空格柜名 句柄 图层) ...)。第2步开始时建一次，
+;; 之后每标一个就追加一条，不用每点一次都把全部柜子重新读一遍（柜子多时明显变快）
+(defun ddfd-wiz-cabinet-index (/ ss i en ed res)
+  (if (setq ss (ddfd-model-ss "CABLE_CABINET*"))
     (progn
       (setq i 0)
-      (while (< i (sslength ss))
-        (setq en (ssname ss i) ed (entget en) i (1+ i))
-        (if (and (/= (cdr (assoc 67 ed)) 1)
-                 (= key (ddfd-remove-spaces (ddfd-entity-name en))))
-          (setq res (cons (cons (cdr (assoc 5 ed)) (cdr (assoc 8 ed))) res))))))
+      (repeat (sslength ss)
+        (setq en (ssname ss i) ed (entget en) i (1+ i)
+              res (cons (list (ddfd-remove-spaces (ddfd-entity-name en)) (cdr (assoc 5 ed)) (cdr (assoc 8 ed)))
+                        res)))))
+  (reverse res))
+
+(defun ddfd-wiz-cabinet-key (nm) (ddfd-remove-spaces (ddfd-text-plain nm)))
+
+;; 索引里已经用了这个柜名、且图元还在（没被删掉）的，返回 ((句柄 . 图层) ...)；比较时和导出一样按去掉空格后的柜名
+(defun ddfd-wiz-find-cabinet (nm idx / key e en res)
+  (setq key (ddfd-wiz-cabinet-key nm))
+  (if (/= key "")
+    (foreach e idx
+      (if (and (= key (car e)) (setq en (handent (cadr e))) (entget en))
+        (setq res (cons (cons (cadr e) (caddr e)) res)))))
   (reverse res))
 
 ;; —— 第2步：标柜子出线点 ——
-(defun ddfd-wiz-step2 (/ n f layer h pt nm dupe cnt)
+(defun ddfd-wiz-step2 (/ n f layer h pt nm dupe cnt idx)
   (princ "\n———— 第2步：标柜子出线点 ————")
   (princ "\n在每个柜子的“柜后出线点”位置点一下，再输入柜名。")
   (princ "\n柜名要和 Excel 清册的 起点/终点 写得一样（空格差异不用管，程序自动忽略）。")
   (setq n (ddfd-wiz-floors))
   (setq h (ddfd-wiz-text-height))
+  (setq idx (ddfd-wiz-cabinet-index))
   (setq f 1)
   (while (<= f n)
     (if (ddfd-wiz-yesno (strcat "\n标注 " (itoa f) "F 层的柜子吗?") "Y")
@@ -1043,17 +1084,18 @@
           (cond
             ((= (ddfd-string-trim nm) "")
              (princ "  柜名为空，本点作废。"))
-            ((and (setq dupe (ddfd-wiz-find-cabinet nm))
+            ((and (setq dupe (ddfd-wiz-find-cabinet nm idx))
                   (not (ddfd-wiz-yesno
                          (strcat "\n柜名「" nm "」已经标过（" (cdar dupe) " 句柄 " (caar dupe)
                                  (if (cdr dupe) (strcat " 等 " (itoa (length dupe)) " 处") "")
                                  "），再标会重名，统计时只会用其中一个的位置。仍然标注吗?")
                          "N")))
              (princ "  已跳过，本点作废。"))
-            (T
-             (ddfd-wiz-make-text pt h nm layer)
-             (setq cnt (1+ cnt))
-             (princ (strcat "  已标注: " nm))))
+            ((ddfd-wiz-make-text pt h nm layer)
+             (setq cnt (1+ cnt)
+                   idx (cons (list (ddfd-wiz-cabinet-key nm) (cdr (assoc 5 (entget (entlast)))) layer) idx))
+             (princ (strcat "  已标注: " nm)))
+            (T (princ "  文字创建失败（请检查当前文字样式和图层是否锁定），本点作废。")))
           (setq pt (getpoint (strcat "\n[" (itoa f) "F] 指定下一个柜子出线点(回车结束本层): ")))
         )
         (princ (strcat "\n" (itoa f) "F 层共标注 " (itoa cnt) " 个柜子。"))
@@ -1094,8 +1136,32 @@
   (princ)
 )
 
+;; 图上已有竖井编号（去掉 _楼层 前的部分）的表，用于默认编号和重名提醒
+;; 按字处理（MBCS 下汉字尾字节可能就是 "_" 的编码），取最后一个 "_" 之前的部分
+(defun ddfd-wiz-shaft-base (nm / chars res)
+  (setq chars (reverse (ddfd-string-chars nm)))
+  (if (member "_" chars)
+    (apply 'strcat (reverse (cdr (member "_" chars))))
+    nm))
+
+(defun ddfd-wiz-shaft-names (/ ss i nm res)
+  (if (setq ss (ddfd-model-ss "CABLE_SHAFT*"))
+    (progn
+      (setq i 0)
+      (repeat (sslength ss)
+        (setq nm (strcase (ddfd-wiz-shaft-base (ddfd-string-trim (ddfd-entity-name (ssname ss i))))) i (1+ i))
+        (if (and (/= nm "") (not (member nm res))) (setq res (cons nm res))))))
+  res)
+
+;; 下一个可用的 ZJ 编号：图上已有 ZJ1~ZJn 时从 n+1 开始，重新加载 LISP 后也不会从 ZJ1 重来
+(defun ddfd-wiz-next-shaft-no (names / nm best)
+  (setq best 0)
+  (foreach nm names
+    (if (wcmatch nm "ZJ#*") (setq best (max best (atoi (substr nm 3))))))
+  (1+ best))
+
 ;; —— 第4步：标竖井 ——
-(defun ddfd-wiz-step4 (/ n h base f1 f2 f tmp layer pt more)
+(defun ddfd-wiz-step4 (/ n h base f1 f2 f tmp layer pt more names)
   (princ "\n———— 第4步：标竖井（有跨楼层电缆才需要）————")
   (setq n (ddfd-wiz-floors))
   (if (< n 2)
@@ -1104,11 +1170,19 @@
       (progn
         (princ "\n同一个竖井要在它经过的每一层平面图上各点一个位置，程序会自动写 ZJn_楼层 配对文字。")
         (setq h (ddfd-wiz-text-height))
-        (if (not *ddfd-wiz-shaftn*) (setq *ddfd-wiz-shaftn* 1))
+        (setq names (ddfd-wiz-shaft-names))
+        (setq *ddfd-wiz-shaftn* (max (cond (*ddfd-wiz-shaftn*) (T 1)) (ddfd-wiz-next-shaft-no names)))
         (setq more T)
         (while more
-          (setq base (getstring (strcat "\n竖井编号 <ZJ" (itoa *ddfd-wiz-shaftn*) ">: ")))
+          (setq base (ddfd-string-trim (getstring (strcat "\n竖井编号 <ZJ" (itoa *ddfd-wiz-shaftn*) ">: "))))
           (if (= base "") (setq base (strcat "ZJ" (itoa *ddfd-wiz-shaftn*))))
+          (if (and (member (strcase base) names)
+                   (not (ddfd-wiz-yesno (strcat "\n图上已有竖井 " base "，继续标会和它配到一起。仍然用这个编号吗?") "N")))
+            (progn
+              (setq *ddfd-wiz-shaftn* (ddfd-wiz-next-shaft-no names)
+                    base (strcat "ZJ" (itoa *ddfd-wiz-shaftn*)))
+              (princ (strcat "\n改用新编号 " base "。"))))
+          (setq names (cons (strcase base) names))
           (initget 6)
           (setq f1 (getint "\n这个竖井从几层开始? <1>: "))
           (if (not f1) (setq f1 1))
@@ -1131,7 +1205,7 @@
             )
             (setq f (1+ f))
           )
-          (setq *ddfd-wiz-shaftn* (1+ *ddfd-wiz-shaftn*))
+          (setq *ddfd-wiz-shaftn* (ddfd-wiz-next-shaft-no names))
           (setq more (ddfd-wiz-yesno "\n还要添加下一个竖井吗?" "N"))
         )
       )
@@ -1140,51 +1214,53 @@
   (princ)
 )
 
-;; —— 第5步：导出并运行统计 ——
-(defun ddfd-wiz-step5 (/ prefix outdir tooldir input datadir fn src dst cmdfile)
-  (princ "\n———— 第5步：导出数据并运行统计 ————")
-  (setq tooldir (getenv "DDFD_CABLE_PROJDIR"))
-  (if (or (not tooldir) (not (vl-file-directory-p tooldir)))
-    (setq tooldir "")
-  )
-  (if (= tooldir "")
-    (setq input (getstring T "\n项目文件夹(内含 data 子目录和 一键启动.cmd): "))
-    (setq input (getstring T (strcat "\n项目文件夹(内含 data 子目录和 一键启动.cmd) <" tooldir ">: ")))
-  )
-  ;; 粘贴“复制文件地址”得到的路径带双引号，去掉
-  (setq input (ddfd-clean-path input))
-  (if (/= input "") (setq tooldir input))
-  (while (wcmatch tooldir "*\\")
-    (setq tooldir (substr tooldir 1 (1- (strlen tooldir))))
-  )
-  (setq datadir (strcat tooldir "\\data"))
-  (if (vl-file-directory-p datadir)
+;; —— 第5步：自动导出到实际桌面（网页版专用） ——
+;; 依次尝试：Shell Folders（已解析路径，兼容桌面重定向、中文路径及 OneDrive 桌面）→
+;; User Shell Folders（可能含 %USERPROFILE% 等变量，展开后再用）→ %USERPROFILE%\Desktop；返回第一个存在的目录
+(defun ddfd-wiz-reg-folder (key / result)
+  (setq result (vl-catch-all-apply 'vl-registry-read
+                 (list (strcat "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\" key)
+                       "Desktop")))
+  (if (and (not (vl-catch-all-error-p result)) (= (type result) 'STR) (/= result ""))
+    (ddfd-wiz-expand-env result)))
+
+;; 展开路径里的 %变量%（只展开能取到值的，取不到的原样保留）
+(defun ddfd-wiz-expand-env (s / p q nm val)
+  (setq p 0)
+  (while (and (setq p (vl-string-search "%" s p))
+              (setq q (vl-string-search "%" s (1+ p))))
+    (setq nm (substr s (+ p 2) (- q p 1)))
+    (if (and (/= nm "") (setq val (getenv nm)))
+      (setq s (strcat (substr s 1 p) val (substr s (+ q 2))) p (+ p (strlen val)))
+      (setq p (1+ q))))
+  s)
+
+(defun ddfd-wiz-desktop-folder (/ dirs dir res)
+  (setq dirs (list (ddfd-wiz-reg-folder "Shell Folders")
+                   (ddfd-wiz-reg-folder "User Shell Folders")
+                   (if (getenv "USERPROFILE") (strcat (getenv "USERPROFILE") "\\Desktop"))))
+  (foreach dir dirs
+    (if (and (not res) dir (vl-file-directory-p dir)) (setq res dir)))
+  res)
+
+(defun ddfd-wiz-step5 (/ desktop outdir)
+  (princ "\n———— 第5步：导出数据到桌面 ————")
+  (setq desktop (ddfd-wiz-desktop-folder))
+  (if desktop
     (progn
-      (setq outdir (strcat datadir "\\"))
+      (setq outdir desktop)
+      (if (not (wcmatch outdir "*\\"))
+        (setq outdir (strcat outdir "\\")))
+      (princ (strcat "\n自动导出目录：" outdir))
       (if (ddfd-do-export outdir)
         (progn
-      (setenv "DDFD_CABLE_PROJDIR" tooldir)
-      (setq cmdfile (strcat tooldir "\\一键启动.cmd"))
-      (if (findfile cmdfile)
-        (if (ddfd-wiz-yesno "\n现在就运行统计吗?" "Y")
-          (progn
-            (startapp "cmd.exe" (strcat "/c start \"\" \"" cmdfile "\""))
-            (princ "\n已启动统计窗口。跑完后查看 outputs\\自动统计_计算结果.xlsx 和 outputs\\路径可视化.html。")
-            (princ "\n若“问题清单”里有柜子对不上，把 outputs\\柜子清单.csv 的建议填进 data\\柜名别名.csv 再重跑。")
-          )
-          (princ "\n之后双击项目文件夹里的 一键启动.cmd 即可。")
-        )
-        (princ (strcat "\n未找到 " cmdfile "，之后请手动运行统计。"))
-      )
-        ))
-    )
-    (progn
-      (princ (strcat "\n未找到 data 子目录: " datadir))
-      (princ "\n未导出任何数据，请先选择有效的项目文件夹。")
-    )
-  )
-  (princ)
-)
+          (princ (strcat "\n已导出到桌面：" outdir))
+          (princ "\n文件：柜子坐标.csv、路径线段.csv、竖井.csv、房间范围.csv。")
+          (princ "\n请回到网页版“电缆统计”，将这四个CSV拖入导入区域，点击“上传并保存”。")
+          (if (ddfd-wiz-yesno "\n现在打开网页版工作台吗?" "N")
+            (startapp "explorer.exe" *ddfd-web-url*)))))
+    (princ "\n无法读取或访问 Windows 桌面目录，未导出任何数据。可改用 DDFD_EXPORT_CABLE_ROUTE 手动指定导出目录。"))
+  (princ))
 
 ;; 保存并恢复用户环境（捕捉模式、当前图层）
 (defun ddfd-wiz-restore ()
@@ -1204,7 +1280,7 @@
   (if go (if (ddfd-wiz-yesno "\n房间定义完成。进入第2步(标柜子)?" "Y") (ddfd-wiz-step2) (setq go nil)))
   (if go (if (ddfd-wiz-yesno "\n第2步完成。进入第3步(画路径)?" "Y") (ddfd-wiz-step3) (setq go nil)))
   (if go (if (ddfd-wiz-yesno "\n第3步完成。进入第4步(标竖井)?" "Y") (ddfd-wiz-step4) (setq go nil)))
-  (if go (if (ddfd-wiz-yesno "\n第4步完成。进入第5步(导出并运行统计)?" "Y") (ddfd-wiz-step5) (setq go nil)))
+  (if go (if (ddfd-wiz-yesno "\n第4步完成。进入第5步(导出到桌面)?" "Y") (ddfd-wiz-step5) (setq go nil)))
   (if (not go)
     (princ "\n已停在当前步骤。之后输入 DDFD_CABLE_WIZARD 可从任意步骤继续。")
   )
@@ -1242,7 +1318,7 @@
   (princ "\n  [2] 标柜子   - 在柜后出线点点一下+输柜名，自动写文字")
   (princ "\n  [3] 画路径   - 沿电缆沟/桥架中心画多段线，自动开端点捕捉")
   (princ "\n  [4] 标竖井   - 跨楼层电缆用，自动写 ZJn_楼层 配对文字")
-  (princ "\n  [5] 导出运行 - 导出CSV并复制进项目data，可直接运行统计")
+  (princ "\n  [5] 导出桌面 - 自动导出四个CSV到桌面，回网页上传计算")
   (princ "\n  [Q] 退出向导")
   (princ)
 )
@@ -1276,6 +1352,6 @@
 (defun c:DDFD_CABLE_EXPORT_RUN () (ddfd-wiz-run 5))
 
 (princ (strcat "\n已加载电缆统计引导向导（版本 " *ddfd-cable-version* "）。输入 DDFD_CABLE_WIZARD 开始一步步操作。"))
-(princ "\n分步命令: DDFD_CABLE_LAYERS 建图层 | DDFD_CABLE_ROOMS 定义房间 | DDFD_CABLE_CABINETS 标柜子 | DDFD_CABLE_ROUTES 画路径 | DDFD_CABLE_SHAFTS 标竖井 | DDFD_CABLE_EXPORT_RUN 导出并运行 | DDFD_EXPORT_CABLE_ROUTE 仅导出")
+(princ "\n分步命令: DDFD_CABLE_LAYERS 建图层 | DDFD_CABLE_ROOMS 定义房间 | DDFD_CABLE_CABINETS 标柜子 | DDFD_CABLE_ROUTES 画路径 | DDFD_CABLE_SHAFTS 标竖井 | DDFD_CABLE_EXPORT_RUN 导出到桌面 | DDFD_EXPORT_CABLE_ROUTE 仅导出")
 (princ "\n房间检查: DDFD_ROOM_CHECK 定位房间图层上的问题图形 | DDFD_CLEAN_ROOM_LAYERS 把未命名的移到 0 层")
 (princ)

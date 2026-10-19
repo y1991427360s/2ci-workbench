@@ -185,16 +185,83 @@ function statusTable() {
 }
 
 function uploadBlock() {
-    return '<div class="drop"><h3>导入工程数据</h3><p class="muted">上传原始清册 XLSX、CAD 导出的 CSV，或已有工程的 ZIP。ZIP 中的 outputs 不会覆盖成果。</p><input id="upload-files" type="file" multiple accept=".xlsx,.csv,.zip,.txt,.json"><button id="upload" class="primary">上传并保存</button><p class="muted" style="margin-top:8px">单次最多 80MB；中文 CSV 使用 UTF-8 BOM 编码。</p></div>';
+    return '<div class="drop" id="upload-drop"><h3>导入工程数据</h3><p class="muted">上传原始清册 XLSX、CAD 导出的 CSV，或已有工程的 ZIP。ZIP 中的 outputs 不会覆盖成果。</p><p class="drop-hint">将文件拖到这里，可多次追加；也可点击下方选择文件。</p><input id="upload-files" aria-label="选择工程数据文件" type="file" multiple accept=".xlsx,.csv,.zip,.txt,.json"><div id="upload-selection" aria-live="polite"></div><button id="upload" class="primary">上传并保存</button><p class="muted" style="margin-top:8px">单次最多 80MB；中文 CSV 使用 UTF-8 BOM 编码。</p></div>';
 }
 
 function bindUpload() {
-    if (!$('#upload')) return;
-    $('#upload').onclick = () => action(async () => {
-        const files = $('#upload-files').files;
-        if (!files.length) throw Error('请先选择文件');
+    const upload = $('#upload'), input = $('#upload-files'), zone = $('#upload-drop');
+    if (!upload) return;
+    let pending = [], dragDepth = 0;
+    const sizeLabel = bytes => bytes < 1024 * 1024 ? (bytes / 1024).toFixed(1) + ' KB' : (bytes / 1024 / 1024).toFixed(1) + ' MB';
+    function drawSelection() {
+        $('#upload-selection').innerHTML = pending.length ? '<p>待上传 ' + pending.length + ' 个文件 · ' + sizeLabel(pending.reduce((sum, f) => sum + f.size, 0)) + '</p><ul class="upload-list">' + pending.map((f, i) => '<li><span>' + esc(f.name) + ' <small>' + sizeLabel(f.size) + '</small></span><button type="button" data-remove="' + i + '" aria-label="移除 ' + esc(f.name) + '">移除</button></li>').join('') + '</ul>' : '';
+        $('#upload-selection').querySelectorAll('[data-remove]').forEach(button => {
+            button.onclick = () => {
+                if (busy) return;
+                pending.splice(Number(button.dataset.remove), 1);
+                drawSelection();
+            };
+        });
+    }
+    function addFiles(files) {
+        if (busy) return;
+        const incoming = Array.from(files);
+        if (!incoming.length) return;
+        if (incoming.some(f => !/\.(xlsx|csv|zip|txt|json)$/i.test(f.name))) {
+            notify('请选择 XLSX、CSV、ZIP、TXT 或 JSON 文件；文件夹请先压缩为 ZIP', true);
+            return;
+        }
+        const next = pending.slice();
+        for (const f of incoming) {
+            const index = next.findIndex(old => old.name === f.name);
+            if (index < 0) next.push(f);
+            else next[index] = f;
+        }
+        if (next.reduce((sum, f) => sum + f.size, 0) > 80 * 1024 * 1024) {
+            notify('待上传文件总大小超过 80MB，请分批上传', true);
+            return;
+        }
+        pending = next;
+        drawSelection();
+    }
+    input.onchange = () => {
+        addFiles(input.files);
+        input.value = '';
+    };
+    const isFileDrag = event => Array.from(event.dataTransfer?.types || []).includes('Files');
+    zone.addEventListener('dragenter', event => {
+        if (!isFileDrag(event)) return;
+        event.preventDefault();
+        dragDepth++;
+        if (!busy) zone.classList.add('drag-over');
+    });
+    zone.addEventListener('dragover', event => {
+        if (!isFileDrag(event)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = busy ? 'none' : 'copy';
+    });
+    zone.addEventListener('dragleave', event => {
+        event.preventDefault();
+        if (--dragDepth <= 0) {
+            dragDepth = 0;
+            zone.classList.remove('drag-over');
+        }
+    });
+    zone.addEventListener('drop', event => {
+        event.preventDefault();
+        dragDepth = 0;
+        zone.classList.remove('drag-over');
+        const items = Array.from(event.dataTransfer?.items || []);
+        if (items.some(item => item.webkitGetAsEntry?.()?.isDirectory)) {
+            notify('暂不支持直接拖入文件夹，请选择其中的文件，或压缩为 ZIP 后上传', true);
+            return;
+        }
+        addFiles(event.dataTransfer?.files || []);
+    });
+    upload.onclick = () => action(async () => {
+        if (!pending.length) throw Error('请先选择或拖入文件');
         const form = new FormData();
-        for (const f of files) form.append('files', f);
+        for (const f of pending) form.append('files', f);
         current = await api('/projects/' + current.id + '/upload', 'POST', form);
         notify('工程输入已保存');
         await render();
@@ -369,7 +436,7 @@ function outputs(c) {
 }
 
 function guide(c) {
-    c.innerHTML = '<div class="hero"><p class="eyebrow">CAD DATA / 数据导出向导</p><h2>从图纸提取路径，在网页完成计算</h2><p>使用原版完整 CAD 导出向导，一键从 CAD 提取设备、路径与坚井数据，上传至当前工程即可完成自动化设计计算。</p></div><div class="panel"><div class="actions"><a class="button primary" href="/static/cad_cable_wizard.lsp" download>↓ 下载 CAD 导出向导 (AutoLISP)</a></div><div class="steps"><p>在 AutoCAD / ZWCAD 中输入 APPLOAD 命令，加载下载的 LISP 向导程序。</p><p>在命令行执行 DDFD_CABLE_WIZARD 命令，按向导定义房间范围、柜子、路径及竖井。</p><p>在向导第 5 步选定工程导出目标文件夹，自动导出 CSV 数据至 data 目录。</p><p>进入网页版「电缆统计」模块，上传原始工程清册与导出的 CSV 文件。</p><p>核对计算参数与柜名映射，点击计算并打开二维 / 三维路径可视化复核。</p></div><h3 style="margin-top:24px">端子与接线输入示例</h3><div class="grid"><pre>端子排输入示例：\nX、1、2、3\nZD、1、11</pre><pre>接线输入示例：\nX:1、A610\nX:2、B903、甲柜\nX:3、701、乙柜</pre></div><p class="muted" style="margin-top:14px">同一根电缆只在最后一条填去向柜。坐标格式的端子名称行须以「端子名」结尾。普通格式与坐标格式不能混用。</p></div>';
+    c.innerHTML = '<div class="hero"><p class="eyebrow">CAD DATA / 数据导出向导</p><h2>从图纸提取路径，在网页完成计算</h2><p>使用原版完整 CAD 导出向导，一键从 CAD 提取设备、路径与竖井数据，上传至当前工程即可完成自动化设计计算。</p></div><div class="panel"><div class="actions"><a class="button primary" href="/static/cad_cable_wizard.lsp" download>↓ 下载 CAD 导出向导 (AutoLISP)</a></div><div class="steps"><p>在 AutoCAD / ZWCAD 中输入 APPLOAD 命令，加载下载的 LISP 向导程序。</p><p>在命令行执行 DDFD_CABLE_WIZARD 命令，按向导定义房间范围、柜子、路径及竖井。</p><p>在向导第 5 步自动将四个 CSV 导出到桌面，无需选择文件夹。</p><p>进入网页版「电缆统计」模块，上传原始工程清册，将桌面导出的四个 CSV 拖入导入区域并保存。</p><p>核对计算参数与柜名映射，点击计算并打开二维 / 三维路径可视化复核。</p></div><h3 style="margin-top:24px">端子与接线输入示例</h3><div class="grid"><pre>端子排输入示例：\nX、1、2、3\nZD、1、11</pre><pre>接线输入示例：\nX:1、A610\nX:2、B903、甲柜\nX:3、701、乙柜</pre></div><p class="muted" style="margin-top:14px">同一根电缆只在最后一条填去向柜。坐标格式的端子名称行须以「端子名」结尾。普通格式与坐标格式不能混用。</p></div>';
 }
 
 async function navigate(next) {
@@ -440,6 +507,13 @@ window.addEventListener('beforeunload', e => {
         e.preventDefault();
         e.returnValue = '';
     }
+});
+
+document.addEventListener('dragover', e => {
+    if (Array.from(e.dataTransfer?.types || []).includes('Files')) e.preventDefault();
+});
+document.addEventListener('drop', e => {
+    if (Array.from(e.dataTransfer?.types || []).includes('Files')) e.preventDefault();
 });
 
 document.addEventListener('keydown', e => {
