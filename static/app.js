@@ -418,8 +418,9 @@ async function terminal(c) {
                 await reload();
                 current.terminalIssues = issues;
                 current.terminalMemory = memory;
-                const files = current.outputs.filter(f => f.name.endsWith('.dxf') && !f.name.endsWith('-仅接线.dxf'));
-                $('#terminal-result').innerHTML += '<div class="actions">' + files.map(f => '<a class="button primary" href="' + link(f.name) + '">↓ 下载 ' + esc(f.name.split('/').pop()) + '</a>').join('') + '</div>';
+                const filename = r.path.replace(/\\/g, '/').split('/').pop();
+                const output = 'outputs/端子排/' + filename;
+                $('#terminal-result').innerHTML += '<div class="actions"><a class="button primary" href="' + link(output) + '">↓ 下载 ' + esc(filename) + '</a></div>';
             }
             notify(r.ok ? (actionName === 'generate' ? 'DXF 已生成，可以下载' : '输入检查通过') : '请修正输入后重试', !r.ok);
         });
