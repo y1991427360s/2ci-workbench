@@ -1865,9 +1865,9 @@
 (defun ddfd:zoom (h / en ed pts box cx cy size w)
   (if (and h (setq en (handent h)) (setq ed (entget en)))
     (progn
-      (setq pts (if (wcmatch (cdr (assoc 0 ed)) "*POLYLINE")
-                  (ddfd-room-vertices en)
-                  (list (cdr (assoc 10 ed))))
+      (setq pts (cond ((wcmatch (cdr (assoc 0 ed)) "*POLYLINE") (ddfd-room-vertices en))
+                      ((= (cdr (assoc 0 ed)) "LINE") (list (cdr (assoc 10 ed)) (cdr (assoc 11 ed))))
+                      (T (list (cdr (assoc 10 ed)))))
             box (ddfd-ov-bbox pts)
             cx (/ (+ (car box) (caddr box)) 2.0)
             cy (/ (+ (cadr box) (cadddr box)) 2.0)
