@@ -45,4 +45,4 @@ Existing commits use concise imperative summaries, occasionally with a `chore:` 
 
 ## Security & Deployment
 
-Never commit passwords, `.env`, API tokens, SSH keys, or real engineering data. Preserve authentication, CSRF protection, and original inputs. Production uses `2ci.service` behind nginx on server 9. Preserve existing SNI routing and the hostname-specific Cloudflare SSL override. Read `deploy/` and deployment documentation before changing infrastructure, and update documentation with verified facts.
+Never commit passwords, `.env`, API tokens, SSH keys, or real engineering data. Preserve authentication, CSRF protection, and original inputs. Production uses `2ci.service` behind nginx on server 5 (`/opt/2ci-workbench`). Preserve existing SNI routing and the hostname-specific Cloudflare SSL override. Read `deploy/` and deployment documentation before changing infrastructure, and update documentation with verified facts.

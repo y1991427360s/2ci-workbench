@@ -1,19 +1,24 @@
 ;;; 多氟多电缆长度自动统计 - CAD 分步引导向导（自包含，含导出命令）
-;;; 只需 APPLOAD 本文件，然后输入 DDFD_CABLE_WIZARD，按提示一步步做即可。
+;;; 只需 APPLOAD 本文件，然后输入 DCW（或 DDFD_CABLE_WIZARD），按菜单一步步做即可。支持中望 CAD 2026 和 AutoCAD 2018。
 ;;;
-;;; 包含以下命令:
-;;;   DDFD_CABLE_WIZARD        引导向导：建图层→标柜子→画路径→标竖井→导出到桌面
-;;;   DDFD_CABLE_LAYERS        第1步：按楼层数自动创建 CABLE_* 图层
-;;;   DDFD_CABLE_ROOMS         定义房间：给闭合多段线写房间名称（放到 CABLE_ROOM_nF）
-;;;   DDFD_CABLE_CABINETS      第2步：逐个点柜子出线点并写柜名文字（柜名已标过会提醒）
-;;;   DDFD_CABLE_ROUTES        第3步：沿电缆沟/桥架画走线路径（自动开端点捕捉）
-;;;   DDFD_CABLE_SHAFTS        第4步：标跨楼层竖井（自动写 ZJn_楼层 配对文字）
-;;;   DDFD_CABLE_EXPORT_RUN    第5步：自动导出4个CSV到桌面，回网页上传计算
-;;;   DDFD_EXPORT_CABLE_ROUTE  仅导出4个CSV（与 cad_export_cable_route.lsp 相同）
+;;; 六个步骤（菜单和分步命令一一对应，可以随时跳到任意一步，想做哪层做哪层）:
+;;;   1 建楼层     DDFD_CABLE_LAYERS      写出楼层（可含 B1F），自动创建 CABLE_* 图层
+;;;   2 定义房间   DDFD_CABLE_ROOMS       给闭合多段线写房间名称（放到 CABLE_ROOM_nF）
+;;;   3 标柜子     DDFD_CABLE_CABINETS    点柜子出线点并写柜名文字（柜名已标过会提醒）
+;;;   4 画通道     DDFD_CABLE_ROUTES      沿电缆沟/桥架画走线通道（自动开端点捕捉）
+;;;   5 标竖井     DDFD_CABLE_SHAFTS      标跨楼层竖井（自动写 ZJn_楼层 配对文字）
+;;;   6 检查导出   DDFD_CABLE_EXPORT_RUN  体检后自动导出4个CSV到桌面，回网页上传计算
+;;;
+;;; 其他命令:
+;;;   DCW                      打开向导菜单（DDFD_CABLE_WIZARD 的短命令）
+;;;   DCV                      定义总览：每层的房间、房间里的柜子、通道、竖井配对和问题清单（DDFD_CABLE_LIST 同）
+;;;   DDFD_EXPORT_CABLE_ROUTE  仅导出4个CSV（与 cad_export_cable_route.lsp 相同，可手动选目录）
 ;;;   DDFD_ROOM_CHECK          检查房间：列出将导出的房间，定位房间图层上未命名/无效的多段线
 ;;;   DDFD_CLEAN_ROOM_LAYERS   把房间图层上未命名的多段线移到 0 层（先确认，可 U 撤销）
 ;;;
-;;; 图层约定（n 为楼层号 1~99；地下室写 B1F、B2F，向导只建地上各层，地下室图层请手工新建同名图层）：
+;;; 面板调用的函数在文件末尾（ddfd:floors、ddfd:cabinets 等），总览文件格式见“定义总览”一节。
+;;;
+;;; 图层约定（n 为楼层号 1~99，地下室写 B1F、B2F）：
 ;;;   CABLE_CABINET_nF  柜子出线点文字     CABLE_ROUTE_nF  电缆沟/桥架中心线
 ;;;   CABLE_SHAFT_nF    竖井文字（同一竖井各层命名 ZJ1_1F / ZJ1_2F 配对）
 ;;;   CABLE_ROOM_nF     房间边界（只有“定义房间”写过名称的多段线才算房间）
@@ -25,9 +30,9 @@
 (vl-load-com)
 
 ;; 改动本文件时同步更新版本号，加载时会打印，便于确认 CAD 里用的是哪一版
-(setq *ddfd-cable-version* "2026-10-19-web-opt")
-;; 网页版工作台地址，第5步导出后可直接打开
-(setq *ddfd-web-url* "https://2ci.sen666.com/")
+(setq *ddfd-cable-version* "2026-11-02-live")
+;; 网页版工作台地址，第6步导出后可直接打开
+(setq *ddfd-web-url* "https://2ci.sen666.cn/")
 
 ;;; ================= 通用与导出部分 =================
 ;; 本段原样复制到 cad_export_cable_route.lsp（python tools\lisp_test\sync_export_lsp.py），两份必须逐字一致。
@@ -882,10 +887,12 @@
   (princ))
 
 ;;; ================= 引导向导部分 =================
+;; 六步：1 建楼层 → 2 定义房间 → 3 标柜子 → 4 画通道 → 5 标竖井 → 6 检查导出。
+;; 命令行向导和面板走同一套步骤函数：命令行不传楼层时现问，面板用 (ddfd:cabinets "2F") 这类函数直接指定楼层。
 
-;; 楼层号 -> 图层名，kind 取 "CABINET" / "ROUTE" / "SHAFT"
-(defun ddfd-wiz-layer-name (kind f)
-  (strcat "CABLE_" kind "_" (itoa f) "F")
+;; 楼层串 -> 图层名，kind 取 "CABINET" / "ROUTE" / "SHAFT" / "ROOM"
+(defun ddfd-wiz-layer-name (kind floor)
+  (strcat "CABLE_" kind "_" floor)
 )
 
 (defun ddfd-wiz-make-layer (name color)
@@ -900,28 +907,117 @@
   )
 )
 
-;; 询问楼层数并记住（写入注册表环境项，下次默认沿用）；图层名 1F~99F 都能解析楼层
-(defun ddfd-wiz-ask-floors (/ saved n)
-  (setq saved (getenv "DDFD_CABLE_FLOORS"))
-  (setq saved (if (and saved (> (atoi saved) 0)) (atoi saved) 2))
-  (initget 6)
-  (setq n (getint (strcat "\n这张图一共几层楼? <" (itoa saved) ">: ")))
-  (if (not n) (setq n saved))
-  (if (> n 99) (setq n 99))
-  (setenv "DDFD_CABLE_FLOORS" (itoa n))
-  n
+(defun ddfd-wiz-layer-color (kind)
+  (cdr (assoc kind '(("CABINET" . 2) ("ROUTE" . 4) ("SHAFT" . 1) ("ROOM" . 6)))))
+
+;; 确保某楼层的某类图层存在，返回图层名
+(defun ddfd-wiz-ensure-layer (kind floor / nm)
+  (setq nm (ddfd-wiz-layer-name kind floor))
+  (ddfd-wiz-make-layer nm (ddfd-wiz-layer-color kind))
+  nm)
+
+;; 楼层很少，这里用 vl-sort 没有大列表的性能问题
+(defun ddfd-wiz-sort-floors (floors)
+  (vl-sort floors '(lambda (a b) (< (ddfd-floor-key a) (ddfd-floor-key b)))))
+
+;; 图纸里已有的楼层：从 CABLE_* 图层名解析，按 B2F、B1F、1F、2F 排好
+(defun ddfd-wiz-layer-floors (/ rec nm fl res)
+  (setq rec (tblnext "LAYER" T))
+  (while rec
+    (setq nm (cdr (assoc 2 rec)))
+    (if (wcmatch (strcase nm) "CABLE_CABINET*,CABLE_ROUTE*,CABLE_SHAFT*,CABLE_ROOM*")
+      (progn
+        (setq fl (ddfd-layer-floor nm))
+        (if (and (/= fl "") (not (member fl res))) (setq res (cons fl res)))))
+    (setq rec (tblnext "LAYER")))
+  (ddfd-wiz-sort-floors res))
+
+;; 手输楼层转成标准写法：1、1F、b1、B1F、二层 都能认；认不出返回 ""
+(defun ddfd-wiz-parse-floor (s / fl)
+  (setq s (ddfd-string-trim s))
+  (if (= s "")
+    ""
+    (progn
+      (setq fl (ddfd-layer-floor (strcat "_" s)))
+      (if (= fl "") (setq fl (ddfd-layer-floor (strcat "_" s "F"))))
+      fl)))
+
+;; 按空格、逗号、顿号、分号拆开
+(defun ddfd-wiz-split-floors (s / cur res c)
+  (setq cur "")
+  (foreach c (append (ddfd-string-chars s) (list " "))
+    (if (member c '(" " "\t" "," "，" "、" ";" "；"))
+      (progn
+        (if (/= cur "") (setq res (cons cur res)))
+        (setq cur ""))
+      (setq cur (strcat cur c))))
+  (reverse res))
+
+;; "3" 表示 1F~3F；"B1F 1F 2F" 按列出的来。返回排好序、去重的楼层表，认不出的打印出来
+(defun ddfd-wiz-input-floors (s / tokens n i fl res)
+  (setq tokens (ddfd-wiz-split-floors s))
+  (if (and tokens (null (cdr tokens))
+           (> (setq n (atoi (car tokens))) 0)
+           (= (itoa n) (car tokens)))
+    (progn
+      (setq i 1 n (min n 99))
+      (while (<= i n)
+        (setq res (cons (strcat (itoa i) "F") res) i (1+ i))))
+    (foreach s tokens
+      (setq fl (ddfd-wiz-parse-floor s))
+      (cond
+        ((= fl "") (princ (strcat "\n认不出楼层“" s "”，已跳过（应写 1F、2F、B1F 这样）。")))
+        ((not (member fl res)) (setq res (cons fl res))))))
+  (ddfd-wiz-sort-floors res))
+
+;; 问一个楼层：回车用 def，认不出就重问
+(defun ddfd-wiz-ask-one-floor (msg def / s fl)
+  (setq fl "")
+  (while (= fl "")
+    (setq s (getstring T (strcat msg " <" def ">: ")))
+    (if (= (ddfd-string-trim s) "")
+      (setq fl def)
+      (progn
+        (setq fl (ddfd-wiz-parse-floor s))
+        (if (= fl "") (princ "\n认不出这个楼层，请写 1F、2F、B1F 这样。")))))
+  fl)
+
+;; 选接下来要做的楼层。first 为 T 时回车用默认层；之后回车表示结束，返回 nil
+(defun ddfd-wiz-ask-floor (first / floors def known s fl done)
+  (setq floors (ddfd-wiz-layer-floors)
+        def (cond ((member *ddfd-wiz-floor* floors) *ddfd-wiz-floor*)
+                  ((car floors))
+                  (T "1F"))
+        known (if floors (strcat " 已有: " (ddfd-join floors " ")) ""))
+  (while (not done)
+    (setq s (ddfd-string-trim
+              (getstring T (strcat "\n" (if first "处理哪一层?" "接着处理哪一层?") known
+                                   (if first (strcat " <" def ">: ") " <回车结束>: ")))))
+    (if (= s "")
+      (setq fl (if first def) done T)
+      (progn
+        (setq fl (ddfd-wiz-parse-floor s))
+        (if (= fl "")
+          (princ "\n认不出这个楼层，请写 1F、2F、B1F 这样。")
+          (setq done T)))))
+  fl)
+
+;; 对楼层执行 fn：传了 floor 只做这一层（面板用），没传就一层层问，想做哪层做哪层
+(defun ddfd-wiz-each-floor (fn floor / cur first)
+  (if floor
+    (progn
+      (setq *ddfd-wiz-floor* floor)
+      (ddfd-ov-refresh)
+      (apply fn (list floor)))
+    (progn
+      (setq first T)
+      (while (setq cur (ddfd-wiz-ask-floor first))
+        (setq first nil *ddfd-wiz-floor* cur)
+        (ddfd-ov-refresh)
+        (apply fn (list cur)))))
 )
 
-;; 取已记住的楼层数；没有则现问
-(defun ddfd-wiz-floors (/ saved)
-  (setq saved (getenv "DDFD_CABLE_FLOORS"))
-  (if (and saved (> (atoi saved) 0))
-    (atoi saved)
-    (ddfd-wiz-ask-floors)
-  )
-)
-
-(defun ddfd-wiz-text-height (/ def h)
+(defun ddfd-wiz-ask-text-height (/ def h)
   (setq def (cond (*ddfd-wiz-texth*) (T (getvar "TEXTSIZE"))))
   (if (<= def 0.0) (setq def 300.0))
   (setq h (getreal (strcat "\n标注文字高度(按图纸单位) <" (rtos def 2 1) ">: ")))
@@ -929,6 +1025,10 @@
   (setq *ddfd-wiz-texth* h)
   h
 )
+
+;; 这张图问过字高就沿用，标柜子时输入 H 可以改
+(defun ddfd-wiz-text-height ()
+  (cond (*ddfd-wiz-texth*) (T (ddfd-wiz-ask-text-height))))
 
 ;; getpoint 返回的是当前 UCS 坐标，TEXT 的 10 组码要的是 WCS（默认拉伸方向下 OCS 就是 WCS），先转换，
 ;; 否则用了 UCS 的图里文字会跑到别处
@@ -948,25 +1048,29 @@
   (= ans "Y")
 )
 
-;; —— 第1步：建图层 ——
-(defun ddfd-wiz-step1 (/ n f nm)
-  (princ "\n———— 第1步：创建图层 ————")
-  (princ "\n按楼层自动创建 4 类图层：柜子出线点(黄)、走线路径(青)、竖井(红)、房间(品红)。已存在的不会重建。")
-  (setq n (ddfd-wiz-ask-floors))
-  (setq f 1)
-  (while (<= f n)
-    (foreach pair (list (list "CABINET" 2) (list "ROUTE" 4) (list "SHAFT" 1) (list "ROOM" 6))
-      (setq nm (ddfd-wiz-layer-name (car pair) f))
-      (ddfd-wiz-make-layer nm (cadr pair))
-      (princ (strcat "\n  " nm))
-    )
-    (setq f (1+ f))
-  )
-  (princ (strcat "\n图层就绪（" (itoa n) " 层楼 × 4 类）。"))
+;; —— 第1步：建楼层 ——
+;; spec 是楼层文字（如 "B1F 1F 2F"），nil 时在命令行问；上次的输入记在注册表环境项里作默认值
+(defun ddfd-wiz-step1 (spec / saved floors fl kind)
+  (princ "\n———— 第1步：建楼层 ————")
+  (princ "\n每层自动建 4 类图层：柜子(黄)、通道(青)、竖井(红)、房间(品红)。已存在的不会重建。")
+  (if (not spec)
+    (progn
+      (setq saved (getenv "DDFD_CABLE_FLOORS"))
+      (if (or (null saved) (= saved "")) (setq saved "2"))
+      (setq spec (getstring T (strcat "\n这张图有哪些楼层（如 B1F 1F 2F；只输数字 3 表示 1F~3F）<" saved ">: ")))
+      (if (= (ddfd-string-trim spec) "") (setq spec saved))))
+  (setq floors (ddfd-wiz-input-floors spec))
+  (if floors
+    (progn
+      (setenv "DDFD_CABLE_FLOORS" (ddfd-string-trim spec))
+      (foreach fl floors
+        (foreach kind '("CABINET" "ROUTE" "SHAFT" "ROOM")
+          (ddfd-wiz-ensure-layer kind fl)))
+      (setq *ddfd-wiz-floor* (car floors))
+      (princ (strcat "\n楼层就绪：" (ddfd-join floors " ") "。")))
+    (princ "\n没有可用的楼层，未创建图层。"))
   (princ)
 )
-
-
 
 ;; 查找某楼层房间图层上已使用该名称的房间（排除 self），返回图元名或 nil
 (defun ddfd-wiz-find-room (layer nm self / ss i en found)
@@ -979,67 +1083,86 @@
           (setq found en)))))
   found)
 
-;; —— 房间范围定义：给闭合直线多段线写房间名称 ——
+;; 有的 AutoCAD 没有 vlax 函数，复制和改属性都走 DXF 数据
+(defun ddfd-wiz-strip-ent (ed layer)
+  (subst (cons 8 layer) (assoc 8 ed)
+         (vl-remove-if '(lambda (p) (member (car p) '(-1 5 102 330 360))) ed)))
+
+;; 复制一条多段线到 layer，返回新图元；POLYLINE 要连顶点和 SEQEND 一起建
+(defun ddfd-wiz-copy-to-layer (en layer / ed sub)
+  (setq ed (entget en))
+  (if (entmake (ddfd-wiz-strip-ent ed layer))
+    (progn
+      (if (= (cdr (assoc 0 ed)) "POLYLINE")
+        (progn
+          (setq sub (entnext en))
+          (while sub
+            (setq ed (entget sub))
+            (entmake (ddfd-wiz-strip-ent ed layer))
+            (setq sub (if (= (cdr (assoc 0 ed)) "SEQEND") nil (entnext sub))))))
+      (entlast))))
+
+;; 设上闭合标志并放到房间图层
+(defun ddfd-wiz-room-close (en layer / ed flag)
+  (setq ed (entget en)
+        flag (cond ((cdr (assoc 70 ed))) (T 0))
+        ed (subst (cons 8 layer) (assoc 8 ed) ed))
+  (entmod (subst (cons 70 (logior flag 1)) (assoc 70 ed) ed)))
+
+;; —— 第2步：定义房间，给闭合直线多段线写房间名称 ——
 ;; 普通图层上的多段线复制一份到 CABLE_ROOM_nF 再命名（原图形不动）；
 ;; 已是房间或本来就画在房间图层上的，直接原地命名/改名，避免叠出重复的房间。
 ;; 不切换当前图层，之后画的图形不会误落到房间图层上。
-(defun ddfd-wiz-step-rooms (/ n f layer pick en ent typ old nm dupe target tobj cnt)
-  (princ "\n———— 房间范围定义 ————")
-  (princ "\n逐个选择已闭合的直线多段线，输入房间名称。普通图层上的图形会复制一份到房间图层，原图形不动。")
-  (setq n (ddfd-wiz-floors))
-  (setq f 1)
-  (while (<= f n)
-    (if (ddfd-wiz-yesno (strcat "\n定义 " (itoa f) "F 房间范围吗?") "Y")
-      (progn
-        (setq layer (ddfd-wiz-layer-name "ROOM" f))
-        (ddfd-wiz-make-layer layer 6)
-        (setq cnt 0)
-        (setq pick (entsel (strcat "\n[" (itoa f) "F] 选择闭合多段线（回车结束）: ")))
-        (while pick
-          (setq en (car pick))
-          (setq ent (entget en))
-          (setq typ (cdr (assoc 0 ent)))
-          (cond
-            ((not (member typ '("LWPOLYLINE" "POLYLINE")))
-             (princ "\n对象不是 LWPOLYLINE/POLYLINE，已跳过。"))
-            ((not (ddfd-room-closed-p en))
-             (princ "\n多段线既未设置闭合标志，首尾点也未重合，已跳过。"))
-            ((ddfd-room-has-arc en)
-             (princ "\n房间范围不能包含圆弧段，请改用直线多段线。"))
-            (T
-             (setq old (ddfd-room-name en))
-             (if (/= old "")
-               (princ (strcat "\n这已经是房间「" old "」，输入新名称可改名，直接回车保持不变。")))
-             (setq nm (getstring T "\n输入房间名称: "))
-             (setq dupe (if (/= nm "") (ddfd-wiz-find-room layer nm en)))
-             (cond
-               ((= nm "")
-                (princ (if (/= old "") "\n未改名。" "\n房间名称不能为空，已跳过。")))
-               ((and dupe
-                     (not (ddfd-wiz-yesno (strcat "\n" (itoa f) "F 已有房间「" nm "」，删掉旧的、用这次选的替换吗?") "N")))
-                (princ "\n已跳过，原来的房间保持不变。"))
-               (T
-                (if dupe (entdel dupe))
-                (if (or (/= old "") (wcmatch (strcase (cdr (assoc 8 ent))) "CABLE_ROOM*"))
-                  (setq target en)
-                  (setq target (vlax-vla-object->ename (vla-Copy (vlax-ename->vla-object en)))))
-                (setq tobj (vlax-ename->vla-object target))
-                (vla-put-Closed tobj :vlax-true)
-                (vla-put-Layer tobj layer)
-                (ddfd-room-set-name target nm)
-                (setq cnt (1+ cnt))
-                (princ (strcat "\n已定义房间：" nm))))))
-          (setq pick (entsel (strcat "\n[" (itoa f) "F] 选择下一个闭合多段线（回车结束）: ")))
-        )
-        (princ (strcat "\n" (itoa f) "F 共定义 " (itoa cnt) " 个房间。"))
-      )
-    )
-    (setq f (1+ f))
+(defun ddfd-wiz-rooms-floor (floor / layer pick en ent typ old nm dupe target cnt)
+  (setq layer (ddfd-wiz-ensure-layer "ROOM" floor))
+  (setq cnt 0)
+  (setq pick (entsel (strcat "\n[" floor "] 选择闭合多段线（回车结束）: ")))
+  (while pick
+    (setq en (car pick))
+    (setq ent (entget en))
+    (setq typ (cdr (assoc 0 ent)))
+    (cond
+      ((not (member typ '("LWPOLYLINE" "POLYLINE")))
+       (princ "\n对象不是 LWPOLYLINE/POLYLINE，已跳过。"))
+      ((not (ddfd-room-closed-p en))
+       (princ "\n多段线既未设置闭合标志，首尾点也未重合，已跳过。"))
+      ((ddfd-room-has-arc en)
+       (princ "\n房间范围不能包含圆弧段，请改用直线多段线。"))
+      (T
+       (setq old (ddfd-room-name en))
+       (if (/= old "")
+         (princ (strcat "\n这已经是房间「" old "」，输入新名称可改名，直接回车保持不变。")))
+       (setq nm (getstring T "\n输入房间名称: "))
+       (setq dupe (if (/= nm "") (ddfd-wiz-find-room layer nm en)))
+       (cond
+         ((= nm "")
+          (princ (if (/= old "") "\n未改名。" "\n房间名称不能为空，已跳过。")))
+         ((and dupe
+               (not (ddfd-wiz-yesno (strcat "\n" floor " 已有房间「" nm "」，删掉旧的、用这次选的替换吗?") "N")))
+          (princ "\n已跳过，原来的房间保持不变。"))
+         (T
+          (if dupe (entdel dupe))
+          (if (or (/= old "") (wcmatch (strcase (cdr (assoc 8 ent))) "CABLE_ROOM*"))
+            (setq target en)
+            (setq target (ddfd-wiz-copy-to-layer en layer)))
+          (ddfd-wiz-room-close target layer)
+          (ddfd-room-set-name target nm)
+          (setq cnt (1+ cnt))
+          (princ (strcat "\n已定义房间：" nm))
+          (ddfd-ov-refresh)))))
+    (setq pick (entsel (strcat "\n[" floor "] 选择下一个闭合多段线（回车结束）: ")))
   )
+  (princ (strcat "\n" floor " 本次定义 " (itoa cnt) " 个房间。"))
+)
+
+(defun ddfd-wiz-step2 (floor)
+  (princ "\n———— 第2步：定义房间 ————")
+  (princ "\n逐个选择已闭合的直线多段线，输入房间名称。普通图层上的图形会复制一份到房间图层，原图形不动。")
+  (ddfd-wiz-each-floor 'ddfd-wiz-rooms-floor floor)
   (princ)
 )
 
-;; 柜名索引：模型空间柜子图层上全部图元的 ((去空格柜名 句柄 图层) ...)。第2步开始时建一次，
+;; 柜名索引：模型空间柜子图层上全部图元的 ((去空格柜名 句柄 图层) ...)。第3步开始时建一次，
 ;; 之后每标一个就追加一条，不用每点一次都把全部柜子重新读一遍（柜子多时明显变快）
 (defun ddfd-wiz-cabinet-index (/ ss i en ed res)
   (if (setq ss (ddfd-model-ss "CABLE_CABINET*"))
@@ -1062,95 +1185,130 @@
         (setq res (cons (cons (cadr e) (caddr e)) res)))))
   (reverse res))
 
-;; —— 第2步：标柜子出线点 ——
-(defun ddfd-wiz-step2 (/ n f layer h pt nm dupe cnt idx)
-  (princ "\n———— 第2步：标柜子出线点 ————")
+(defun ddfd-wiz-cabinet-point (floor msg)
+  (initget "H")
+  (getpoint (strcat "\n[" floor "] " msg " [H=改字高] <回车结束本层>: ")))
+
+;; h、idx 是 ddfd-wiz-step3 的局部变量，动态作用域下这里直接读写
+(defun ddfd-wiz-cabinets-floor (floor / layer pt nm dupe cnt)
+  (setq layer (ddfd-wiz-ensure-layer "CABINET" floor))
+  (setvar "CLAYER" layer)
+  (setq cnt 0)
+  (setq pt (ddfd-wiz-cabinet-point floor "指定柜子出线点"))
+  (while pt
+    (if (= (type pt) 'STR)
+      (setq h (ddfd-wiz-ask-text-height))
+      (progn
+        (setq nm (getstring T "柜子名称: "))
+        (cond
+          ((= (ddfd-string-trim nm) "")
+           (princ "  柜名为空，本点作废。"))
+          ((and (setq dupe (ddfd-wiz-find-cabinet nm idx))
+                (not (ddfd-wiz-yesno
+                       (strcat "\n柜名「" nm "」已经标过（" (cdar dupe) " 句柄 " (caar dupe)
+                               (if (cdr dupe) (strcat " 等 " (itoa (length dupe)) " 处") "")
+                               "），再标会重名，统计时只会用其中一个的位置。仍然标注吗?")
+                       "N")))
+           (princ "  已跳过，本点作废。"))
+          ((ddfd-wiz-make-text pt h nm layer)
+           (setq cnt (1+ cnt)
+                 idx (cons (list (ddfd-wiz-cabinet-key nm) (cdr (assoc 5 (entget (entlast)))) layer) idx))
+           (princ (strcat "  已标注: " nm))
+           (ddfd-ov-refresh))
+          (T (princ "  文字创建失败（请检查当前文字样式和图层是否锁定），本点作废。")))))
+    (setq pt (ddfd-wiz-cabinet-point floor "指定下一个柜子出线点"))
+  )
+  (princ (strcat "\n" floor " 本次标注 " (itoa cnt) " 个柜子。"))
+)
+
+;; —— 第3步：标柜子出线点 ——
+(defun ddfd-wiz-step3 (floor / h idx)
+  (princ "\n———— 第3步：标柜子 ————")
   (princ "\n在每个柜子的“柜后出线点”位置点一下，再输入柜名。")
   (princ "\n柜名要和 Excel 清册的 起点/终点 写得一样（空格差异不用管，程序自动忽略）。")
-  (setq n (ddfd-wiz-floors))
   (setq h (ddfd-wiz-text-height))
   (setq idx (ddfd-wiz-cabinet-index))
-  (setq f 1)
-  (while (<= f n)
-    (if (ddfd-wiz-yesno (strcat "\n标注 " (itoa f) "F 层的柜子吗?") "Y")
-      (progn
-        (setq layer (ddfd-wiz-layer-name "CABINET" f))
-        (ddfd-wiz-make-layer layer 2)
-        (setvar "CLAYER" layer)
-        (setq cnt 0)
-        (setq pt (getpoint (strcat "\n[" (itoa f) "F] 指定柜子出线点(回车结束本层): ")))
-        (while pt
-          (setq nm (getstring T "柜子名称: "))
-          (cond
-            ((= (ddfd-string-trim nm) "")
-             (princ "  柜名为空，本点作废。"))
-            ((and (setq dupe (ddfd-wiz-find-cabinet nm idx))
-                  (not (ddfd-wiz-yesno
-                         (strcat "\n柜名「" nm "」已经标过（" (cdar dupe) " 句柄 " (caar dupe)
-                                 (if (cdr dupe) (strcat " 等 " (itoa (length dupe)) " 处") "")
-                                 "），再标会重名，统计时只会用其中一个的位置。仍然标注吗?")
-                         "N")))
-             (princ "  已跳过，本点作废。"))
-            ((ddfd-wiz-make-text pt h nm layer)
-             (setq cnt (1+ cnt)
-                   idx (cons (list (ddfd-wiz-cabinet-key nm) (cdr (assoc 5 (entget (entlast)))) layer) idx))
-             (princ (strcat "  已标注: " nm)))
-            (T (princ "  文字创建失败（请检查当前文字样式和图层是否锁定），本点作废。")))
-          (setq pt (getpoint (strcat "\n[" (itoa f) "F] 指定下一个柜子出线点(回车结束本层): ")))
-        )
-        (princ (strcat "\n" (itoa f) "F 层共标注 " (itoa cnt) " 个柜子。"))
-      )
-    )
-    (setq f (1+ f))
-  )
+  (ddfd-wiz-each-floor 'ddfd-wiz-cabinets-floor floor)
   (princ "\n标错的直接用 ERASE 删掉那个文字再重标即可。")
   (princ)
 )
 
-;; —— 第3步：画走线路径 ——
-(defun ddfd-wiz-step3 (/ n f layer more)
-  (princ "\n———— 第3步：画走线路径 ————")
+(defun ddfd-wiz-routes-floor (floor / layer more)
+  (setq layer (ddfd-wiz-ensure-layer "ROUTE" floor))
+  (setvar "CLAYER" layer)
+  (setq more T)
+  (while more
+    (princ (strcat "\n[" floor "] 开始画一条通道(多段线)，画完回车结束这条线..."))
+    (command "_.PLINE")
+    (while (> (getvar "CMDACTIVE") 0) (command PAUSE))
+    (ddfd-ov-refresh)
+    (setq more (ddfd-wiz-yesno (strcat "\n[" floor "] 继续画下一条通道?") "Y"))
+  )
+)
+
+;; —— 第4步：画通道 ——
+(defun ddfd-wiz-step4 (floor)
+  (princ "\n———— 第4步：画通道 ————")
   (princ "\n沿电缆沟/桥架的中心线画多段线，电缆能走哪里线就画到哪里。")
   (princ "\n关键：两条线相接时端点必须真正搭上（端点对端点，或端点搭在另一条线上），只是看着交叉不算连通。")
   (princ "\n已自动打开 端点/交点/最近点 捕捉，照着捕捉标记点取点即可。")
-  (setq n (ddfd-wiz-floors))
   (setvar "OSMODE" 545)
-  (setq f 1)
-  (while (<= f n)
-    (if (ddfd-wiz-yesno (strcat "\n画 " (itoa f) "F 层的路径吗?") "Y")
-      (progn
-        (setq layer (ddfd-wiz-layer-name "ROUTE" f))
-        (ddfd-wiz-make-layer layer 4)
-        (setvar "CLAYER" layer)
-        (setq more T)
-        (while more
-          (princ (strcat "\n[" (itoa f) "F] 开始画一条路径(多段线)，画完回车结束这条线..."))
-          (command "_.PLINE")
-          (while (> (getvar "CMDACTIVE") 0) (command PAUSE))
-          (setq more (ddfd-wiz-yesno (strcat "\n[" (itoa f) "F] 继续画下一条路径?") "Y"))
-        )
-      )
-    )
-    (setq f (1+ f))
-  )
+  (ddfd-wiz-each-floor 'ddfd-wiz-routes-floor floor)
   (princ)
 )
 
-;; 图上已有竖井编号（去掉 _楼层 前的部分）的表，用于默认编号和重名提醒
-;; 按字处理（MBCS 下汉字尾字节可能就是 "_" 的编码），取最后一个 "_" 之前的部分
-(defun ddfd-wiz-shaft-base (nm / chars res)
-  (setq chars (reverse (ddfd-string-chars nm)))
-  (if (member "_" chars)
-    (apply 'strcat (reverse (cdr (member "_" chars))))
-    nm))
+;; r 是倒序的字符表：去掉尾部的数字
+(defun ddfd-wiz-strip-digits (r)
+  (while (ddfd-digit-p (car r)) (setq r (cdr r)))
+  r)
 
+;; 去掉编号和楼层后缀之间的分隔符
+(defun ddfd-wiz-strip-seps (r)
+  (while (member (car r) '("_" "-" " " "\t")) (setq r (cdr r)))
+  r)
+
+;; 倒序字符表去掉楼层后缀：1F、B1F、B1、F1、二层、地下一层、负一层
+(defun ddfd-wiz-strip-floor-tail (r / s)
+  (cond
+    ((member (car r) '("F" "f"))
+     (setq s (ddfd-wiz-strip-digits (cdr r)))
+     (cond
+       ((= (length s) (length (cdr r))) r)
+       ((member (car s) '("B" "b")) (ddfd-wiz-strip-seps (cdr s)))
+       (T (ddfd-wiz-strip-seps s))))
+    ((ddfd-digit-p (car r))
+     (setq s (ddfd-wiz-strip-digits r))
+     (if (member (car s) '("B" "b" "F" "f"))
+       (ddfd-wiz-strip-seps (cdr s))
+       r))
+    ((member (car r) '("层" "楼"))
+     (setq s (cdr r))
+     (while (and (car s) (ddfd-cn-digit (car s))) (setq s (cdr s)))
+     (cond
+       ((= (length s) (length (cdr r))) r)
+       ((equal (car s) "负") (cdr s))
+       ((and (equal (car s) "下") (equal (cadr s) "地")) (cddr s))
+       (T s)))
+    (T r)))
+
+;; 竖井配对名：ZJ1_1F、ZJ1-2F、ZJ1_B1F、竖井甲二层 → ZJ1、竖井甲（和网页的 normalize_shaft_base_id 一致）
+;; 按字处理（MBCS 下汉字尾字节可能就是 "_" 的编码）
+(defun ddfd-wiz-shaft-base (nm / res)
+  (setq res (apply 'strcat (reverse (ddfd-wiz-strip-floor-tail
+                                      (reverse (ddfd-string-chars (ddfd-string-trim nm)))))))
+  (if (= res "") "竖井" res))
+
+;; 图上已有竖井编号的表，用于默认编号和重名提醒
 (defun ddfd-wiz-shaft-names (/ ss i nm res)
   (if (setq ss (ddfd-model-ss "CABLE_SHAFT*"))
     (progn
       (setq i 0)
       (repeat (sslength ss)
-        (setq nm (strcase (ddfd-wiz-shaft-base (ddfd-string-trim (ddfd-entity-name (ssname ss i))))) i (1+ i))
-        (if (and (/= nm "") (not (member nm res))) (setq res (cons nm res))))))
+        (setq nm (ddfd-string-trim (ddfd-entity-name (ssname ss i))) i (1+ i))
+        (if (/= nm "")
+          (progn
+            (setq nm (strcase (ddfd-wiz-shaft-base nm)))
+            (if (not (member nm res)) (setq res (cons nm res))))))))
   res)
 
 ;; 下一个可用的 ZJ 编号：图上已有 ZJ1~ZJn 时从 n+1 开始，重新加载 LISP 后也不会从 ZJ1 重来
@@ -1160,61 +1318,574 @@
     (if (wcmatch nm "ZJ#*") (setq best (max best (atoi (substr nm 3))))))
   (1+ best))
 
-;; —— 第4步：标竖井 ——
-(defun ddfd-wiz-step4 (/ n h base f1 f2 f tmp layer pt more names)
-  (princ "\n———— 第4步：标竖井（有跨楼层电缆才需要）————")
-  (setq n (ddfd-wiz-floors))
-  (if (< n 2)
+;; a、b 之间（含两端）的楼层，从低到高；a、b 不在 floors 里也算上
+(defun ddfd-wiz-floor-range (floors a b / lo hi fl res)
+  (setq lo (min (ddfd-floor-key a) (ddfd-floor-key b))
+        hi (max (ddfd-floor-key a) (ddfd-floor-key b)))
+  (foreach fl (append floors (list a b))
+    (if (and (<= lo (ddfd-floor-key fl) hi) (not (member fl res)))
+      (setq res (cons fl res))))
+  (ddfd-wiz-sort-floors res))
+
+;; —— 第5步：标竖井 ——
+(defun ddfd-wiz-step5 (/ floors h base a b f layer pt more names)
+  (princ "\n———— 第5步：标竖井（有跨楼层电缆才需要）————")
+  (setq floors (ddfd-wiz-layer-floors))
+  (if (< (length floors) 2)
     (princ "\n只有一层楼，用不到竖井，本步跳过。")
-    (if (ddfd-wiz-yesno "\n有跨楼层的电缆需要标竖井吗?" "Y")
-      (progn
-        (princ "\n同一个竖井要在它经过的每一层平面图上各点一个位置，程序会自动写 ZJn_楼层 配对文字。")
-        (setq h (ddfd-wiz-text-height))
-        (setq names (ddfd-wiz-shaft-names))
-        (setq *ddfd-wiz-shaftn* (max (cond (*ddfd-wiz-shaftn*) (T 1)) (ddfd-wiz-next-shaft-no names)))
-        (setq more T)
-        (while more
-          (setq base (ddfd-string-trim (getstring (strcat "\n竖井编号 <ZJ" (itoa *ddfd-wiz-shaftn*) ">: "))))
-          (if (= base "") (setq base (strcat "ZJ" (itoa *ddfd-wiz-shaftn*))))
-          (if (and (member (strcase base) names)
-                   (not (ddfd-wiz-yesno (strcat "\n图上已有竖井 " base "，继续标会和它配到一起。仍然用这个编号吗?") "N")))
+    (progn
+      (princ "\n同一个竖井要在它经过的每一层平面图上各点一个位置，程序会自动写 ZJn_楼层 配对文字。")
+      (setq h (ddfd-wiz-text-height))
+      (setq names (ddfd-wiz-shaft-names))
+      (setq *ddfd-wiz-shaftn* (max (cond (*ddfd-wiz-shaftn*) (T 1)) (ddfd-wiz-next-shaft-no names)))
+      (setq more T)
+      (while more
+        (setq base (ddfd-string-trim (getstring (strcat "\n竖井编号 <ZJ" (itoa *ddfd-wiz-shaftn*) ">: "))))
+        (if (= base "") (setq base (strcat "ZJ" (itoa *ddfd-wiz-shaftn*))))
+        (if (and (member (strcase base) names)
+                 (not (ddfd-wiz-yesno (strcat "\n图上已有竖井 " base "，继续标会和它配到一起。仍然用这个编号吗?") "N")))
+          (progn
+            (setq *ddfd-wiz-shaftn* (ddfd-wiz-next-shaft-no names)
+                  base (strcat "ZJ" (itoa *ddfd-wiz-shaftn*)))
+            (princ (strcat "\n改用新编号 " base "。"))))
+        (setq names (cons (strcase base) names))
+        (setq a (ddfd-wiz-ask-one-floor "\n这个竖井从哪层开始?" (car floors)))
+        (setq b (ddfd-wiz-ask-one-floor "\n到哪层结束?" (last floors)))
+        (foreach f (ddfd-wiz-floor-range floors a b)
+          (setq layer (ddfd-wiz-ensure-layer "SHAFT" f))
+          (setvar "CLAYER" layer)
+          (setq *ddfd-wiz-floor* f)
+          (ddfd-ov-refresh)
+          (setq pt (getpoint (strcat "\n在 " f " 平面图上点竖井 " base " 的位置: ")))
+          (if pt
             (progn
-              (setq *ddfd-wiz-shaftn* (ddfd-wiz-next-shaft-no names)
-                    base (strcat "ZJ" (itoa *ddfd-wiz-shaftn*)))
-              (princ (strcat "\n改用新编号 " base "。"))))
-          (setq names (cons (strcase base) names))
-          (initget 6)
-          (setq f1 (getint "\n这个竖井从几层开始? <1>: "))
-          (if (not f1) (setq f1 1))
-          (initget 6)
-          (setq f2 (getint (strcat "\n到几层结束? <" (itoa n) ">: ")))
-          (if (not f2) (setq f2 n))
-          (if (> f1 f2) (progn (setq tmp f1) (setq f1 f2) (setq f2 tmp)))
-          (setq f f1)
-          (while (<= f f2)
-            (setq layer (ddfd-wiz-layer-name "SHAFT" f))
-            (ddfd-wiz-make-layer layer 1)
-            (setvar "CLAYER" layer)
-            (setq pt (getpoint (strcat "\n在 " (itoa f) "F 平面图上点竖井 " base " 的位置: ")))
-            (if pt
-              (progn
-                (ddfd-wiz-make-text pt h (strcat base "_" (itoa f) "F") layer)
-                (princ (strcat "  已标注: " base "_" (itoa f) "F"))
-              )
-              (princ (strcat "  跳过 " (itoa f) "F（注意：竖井没配对会在问题清单里提示）。"))
-            )
-            (setq f (1+ f))
-          )
-          (setq *ddfd-wiz-shaftn* (ddfd-wiz-next-shaft-no names))
-          (setq more (ddfd-wiz-yesno "\n还要添加下一个竖井吗?" "N"))
-        )
-      )
-    )
-  )
+              (ddfd-wiz-make-text pt h (strcat base "_" f) layer)
+              (princ (strcat "  已标注: " base "_" f))
+              (ddfd-ov-refresh))
+            (princ (strcat "  跳过 " f "（注意：竖井没配对会在问题清单里提示）。"))))
+        (setq *ddfd-wiz-shaftn* (ddfd-wiz-next-shaft-no names))
+        (setq more (ddfd-wiz-yesno "\n还要添加下一个竖井吗?" "N")))))
   (princ)
 )
 
-;; —— 第5步：自动导出到实际桌面（网页版专用） ——
+;;; ================= 定义总览 =================
+;; 读图纸里已定义的全部内容，算好归属和问题，存进下面这些全局表，命令行和面板都从这里取：
+;;   *ddfd-ov-floors*  楼层串的表，楼层未知的对象归到 ""，排在最后
+;;   *ddfd-ov-rooms*   ((楼层 名称 句柄 顶点表 (x0 y0 x1 y1)) ...)
+;;   *ddfd-ov-cabs*    ((柜名 楼层 句柄 x y 房间句柄或nil 房间名或"") ...)
+;;   *ddfd-ov-shafts*  ((配对名 全名 楼层 句柄 x y) ...)
+;;   *ddfd-ov-routes*  ((楼层 句柄 段数 顶点表) ...)
+;;   *ddfd-ov-issues*  ((级别 步骤号 类别 句柄 文字) ...)，级别 err 错误、warn 提醒、info 说明
+;; 只读图纸，不修改任何对象。
+
+(defun ddfd-ov-issue (level step kind handle text)
+  (setq *ddfd-ov-issues* (cons (list level step kind handle text) *ddfd-ov-issues*)))
+
+(defun ddfd-ov-bbox (pts / p x0 y0 x1 y1)
+  (foreach p pts
+    (setq x0 (if x0 (min x0 (car p)) (car p))
+          y0 (if y0 (min y0 (cadr p)) (cadr p))
+          x1 (if x1 (max x1 (car p)) (car p))
+          y1 (if y1 (max y1 (cadr p)) (cadr p))))
+  (list x0 y0 x1 y1))
+
+;; 点在线段上（和网页 point_on_segment 相同的判定）
+(defun ddfd-ov-on-seg (x y a b / ax ay bx by scale)
+  (setq ax (car a) ay (cadr a) bx (car b) by (cadr b)
+        scale (max 1.0 (distance (list ax ay) (list bx by))))
+  (and (<= (abs (- (* (- x ax) (- by ay)) (* (- y ay) (- bx ax)))) (* 1e-8 scale))
+       (<= (+ (* (- x ax) (- x bx)) (* (- y ay) (- y by))) (* 1e-8 scale))))
+
+;; 点在多边形内，边界上也算（和网页 point_in_polygon 相同的判定）
+(defun ddfd-ov-in-poly (x y pts / prev p ay by on inside)
+  (setq prev (last pts))
+  (foreach p pts
+    (if (not on)
+      (progn
+        (if (ddfd-ov-on-seg x y prev p)
+          (setq on T)
+          (progn
+            (setq ay (cadr prev) by (cadr p))
+            (if (and (not (eq (> ay y) (> by y)))
+                     (> (+ (car prev) (/ (* (- y ay) (- (car p) (car prev))) (- by ay))) x))
+              (setq inside (not inside)))))
+        (setq prev p))))
+  (or on inside))
+
+;; 同楼层、点在范围内的房间记录
+(defun ddfd-ov-rooms-at (floor x y / r box res)
+  (foreach r *ddfd-ov-rooms*
+    (setq box (nth 4 r))
+    (if (and (= (car r) floor)
+             (<= (car box) x (caddr box))
+             (<= (cadr box) y (cadddr box))
+             (ddfd-ov-in-poly x y (nth 3 r)))
+      (setq res (cons r res))))
+  (reverse res))
+
+(defun ddfd-ov-room-record (en / ed pts)
+  (setq ed (entget en) pts (ddfd-room-vertices en))
+  (if (equal (car pts) (last pts) 1e-6)
+    (setq pts (reverse (cdr (reverse pts)))))
+  (list (ddfd-layer-floor (cdr (assoc 8 ed))) (ddfd-room-name en) (cdr (assoc 5 ed)) pts (ddfd-ov-bbox pts)))
+
+(defun ddfd-ov-add-cab (en / ent layer floor handle pt nm hits)
+  (setq ent (entget en)
+        layer (cdr (assoc 8 ent))
+        floor (ddfd-layer-floor layer)
+        handle (cdr (assoc 5 ent))
+        pt (ddfd-entity-point en)
+        nm (ddfd-remove-spaces (ddfd-string-trim (ddfd-entity-name en))))
+  (cond
+    ((= nm "")
+     (ddfd-ov-issue "err" 3 "柜名为空" handle (strcat "柜子图层上有对象没有柜名（" layer "），不会被导出")))
+    ((and pt (>= (length pt) 2))
+     (if (= floor "")
+       (ddfd-ov-issue "err" 3 "楼层未知" handle (strcat "柜子 " nm " 所在图层看不出楼层：" layer)))
+     (setq hits (ddfd-ov-rooms-at floor (car pt) (cadr pt)))
+     (if (cdr hits)
+       (ddfd-ov-issue "warn" 3 "房间重叠" handle
+         (strcat "柜子 " nm " 同时在多个房间内：" (ddfd-join (mapcar 'cadr hits) "、"))))
+     (setq *ddfd-ov-cabs*
+       (cons (list nm floor handle (car pt) (cadr pt)
+                   (if hits (caddr (car hits)))
+                   (if hits (cadr (car hits)) ""))
+             *ddfd-ov-cabs*)))))
+
+(defun ddfd-ov-add-shaft (en / ent layer floor handle pt nm)
+  (setq ent (entget en)
+        layer (cdr (assoc 8 ent))
+        floor (ddfd-layer-floor layer)
+        handle (cdr (assoc 5 ent))
+        pt (ddfd-entity-point en)
+        nm (ddfd-string-trim (ddfd-entity-name en)))
+  (cond
+    ((= nm "")
+     (ddfd-ov-issue "err" 5 "竖井名为空" handle (strcat "竖井图层上有对象没有编号（" layer "），不会被导出")))
+    ((and pt (>= (length pt) 2))
+     (if (= floor "")
+       (ddfd-ov-issue "err" 5 "楼层未知" handle (strcat "竖井 " nm " 所在图层看不出楼层：" layer)))
+     (setq *ddfd-ov-shafts*
+       (cons (list (ddfd-wiz-shaft-base nm) nm floor handle (car pt) (cadr pt)) *ddfd-ov-shafts*)))))
+
+;; 通道的顶点表（WCS），规则和 ddfd-export-route-rows 一样；不支持的图元返回 nil
+(defun ddfd-ov-route-points (en ent / typ flags cen r a0 a1 sweep res)
+  (setq typ (cdr (assoc 0 ent))
+        flags (cond ((cdr (assoc 70 ent))) (T 0)))
+  (cond
+    ((= typ "LINE") (list (cdr (assoc 10 ent)) (cdr (assoc 11 ent))))
+    ((= typ "ARC")
+     (setq cen (cdr (assoc 10 ent)) r (cdr (assoc 40 ent))
+           a0 (cdr (assoc 50 ent)) a1 (cdr (assoc 51 ent))
+           sweep (- a1 a0))
+     (while (<= sweep 0.0) (setq sweep (+ sweep pi pi)))
+     (mapcar '(lambda (a)
+                (trans (list (+ (car cen) (* r (cos a))) (+ (cadr cen) (* r (sin a))) (caddr cen)) en 0))
+             (list a0 (+ a0 (/ sweep 4.0)) (+ a0 (/ sweep 2.0)) (+ a0 (* 0.75 sweep)) (+ a0 sweep))))
+    ((or (= typ "LWPOLYLINE") (and (= typ "POLYLINE") (= 0 (logand flags 80))))
+     (setq res (mapcar 'car (if (= typ "LWPOLYLINE") (ddfd-lwpoly-vertices en ent) (ddfd-poly-vertices en ent))))
+     (if (and (= 1 (logand flags 1)) (cdr res))
+       (append res (list (car res)))
+       res))))
+
+;; 段数按导出写出的行数算：首尾重合的段不算；圆弧导出时是一段，这里顶点多只是为了画图
+(defun ddfd-ov-route-segs (typ pts / n)
+  (setq n 0)
+  (if (= typ "ARC")
+    1
+    (progn
+      (while (cdr pts)
+        (if (> (distance (car pts) (cadr pts)) 1e-9) (setq n (1+ n)))
+        (setq pts (cdr pts)))
+      n)))
+
+(defun ddfd-ov-add-route (en / ent layer floor handle typ pts)
+  (setq ent (entget en)
+        layer (cdr (assoc 8 ent))
+        floor (ddfd-layer-floor layer)
+        handle (cdr (assoc 5 ent))
+        typ (cdr (assoc 0 ent))
+        pts (ddfd-ov-route-points en ent))
+  (if pts
+    (progn
+      (if (= floor "")
+        (ddfd-ov-issue "err" 4 "楼层未知" handle (strcat "通道所在图层看不出楼层：" layer)))
+      (setq *ddfd-ov-routes* (cons (list floor handle (ddfd-ov-route-segs typ pts) pts) *ddfd-ov-routes*)))
+    (ddfd-ov-issue "err" 4 "不支持的图元" handle
+      (strcat "通道图层上的 " (if (= typ "POLYLINE") "POLYLINE变体" typ) " 不会被导出，请炸开或改成多段线"))))
+
+;; 柜子、通道都画了才算这一层能算；有柜子没通道的楼层要提醒
+(defun ddfd-ov-floor-check (fl / cabs routes)
+  (setq cabs (ddfd-ov-floor-items *ddfd-ov-cabs* 1 fl)
+        routes (ddfd-ov-floor-items *ddfd-ov-routes* 0 fl))
+  (if (and cabs (null routes) (/= fl ""))
+    (ddfd-ov-issue "warn" 4 "缺通道" "" (strcat fl " 有柜子但没有通道"))))
+
+;; 表里第 idx 项等于楼层 fl 的记录
+(defun ddfd-ov-floor-items (lst idx fl)
+  (vl-remove-if-not '(lambda (r) (equal (nth idx r) fl)) lst))
+
+(defun ddfd-ov-check-rooms (/ seen key r)
+  (foreach r *ddfd-ov-rooms*
+    (setq key (strcat (car r) " " (cadr r)))
+    (if (member key seen)
+      (ddfd-ov-issue "warn" 2 "房间重名" (caddr r) (strcat "同层房间重名：" key))
+      (setq seen (cons key seen)))
+    (if (null (ddfd-ov-room-cabs (caddr r)))
+      (ddfd-ov-issue "info" 2 "空房间" (caddr r) (strcat "房间 " key " 里没有柜子")))))
+
+;; 房间里的柜子记录
+(defun ddfd-ov-room-cabs (handle)
+  (ddfd-ov-floor-items *ddfd-ov-cabs* 5 handle))
+
+;; 重名柜子：第一处是统计时会用的位置，后面每一处各列一条，点击能定位
+(defun ddfd-ov-check-dups (/ c hits n i r)
+  ;; AutoCAD 的 acad_strlsort 遇到空表会打印用法，没柜子时不调用
+  (foreach c (if *ddfd-ov-cabs* (ddfd-dup-names (mapcar 'car *ddfd-ov-cabs*)))
+    (setq hits (ddfd-ov-floor-items *ddfd-ov-cabs* 0 c) n (length hits) i 1)
+    (foreach r (cdr hits)
+      (setq i (1+ i))
+      (ddfd-ov-issue "err" 3 "柜名重复" (caddr r)
+        (strcat "柜名 " c " 重复 " (itoa n) " 处，这是第 " (itoa i) " 处；统计时只用第 1 处")))))
+
+;; 竖井只标了一层就配不成对
+(defun ddfd-ov-check-shafts (/ bases b s floors)
+  (foreach s *ddfd-ov-shafts*
+    (if (not (member (car s) bases)) (setq bases (cons (car s) bases))))
+  (foreach b (reverse bases)
+    (setq floors nil)
+    (foreach s *ddfd-ov-shafts*
+      (if (= (car s) b)
+        (if (member (caddr s) floors)
+          (ddfd-ov-issue "warn" 5 "竖井重复" (cadddr s) (strcat "竖井 " b " 在 " (caddr s) " 标了不止一处"))
+          (setq floors (cons (caddr s) floors)))))
+    (if (null (cdr floors))
+      (ddfd-ov-issue "warn" 5 "竖井未配对" (cadddr (car (ddfd-ov-floor-items *ddfd-ov-shafts* 0 b)))
+        (strcat "竖井 " b " 只标了 " (car floors) "，没有配对的楼层")))))
+
+;; 布局里的 CABLE_* 图元不会被导出，提示一下
+(defun ddfd-ov-check-paper (/ ss)
+  (if (setq ss (ssget "_X" '((8 . "CABLE_CABINET*,CABLE_ROUTE*,CABLE_SHAFT*") (67 . 1))))
+    (ddfd-ov-issue "info" 6 "布局图元" ""
+      (strcat "布局（图纸空间）里有 " (itoa (sslength ss)) " 个 CABLE_* 图元，只导出模型空间，已忽略"))))
+
+;; 重新读一遍图纸。房间先读，柜子归属要用
+(defun ddfd-ov-collect (/ info en h fl floors)
+  (setq *ddfd-ov-rooms* nil *ddfd-ov-cabs* nil *ddfd-ov-shafts* nil *ddfd-ov-routes* nil *ddfd-ov-issues* nil)
+  (setq info (ddfd-room-collect))
+  (foreach en (car info)
+    (setq *ddfd-ov-rooms* (cons (ddfd-ov-room-record en) *ddfd-ov-rooms*)))
+  (setq *ddfd-ov-rooms* (reverse *ddfd-ov-rooms*))
+  (foreach h (cadr info)
+    (ddfd-ov-issue "warn" 2 "未命名房间" h "房间图层上这条多段线没有名称，不会算作房间"))
+  (foreach h (caddr info)
+    (ddfd-ov-issue "warn" 2 "无效房间" h "这个房间不闭合、含圆弧、面积为零或图层看不出楼层，不会被导出"))
+  (ddfd-export-ss (ddfd-model-ss "CABLE_CABINET*") 'ddfd-ov-add-cab nil)
+  (ddfd-export-ss (ddfd-model-ss "CABLE_SHAFT*") 'ddfd-ov-add-shaft nil)
+  (ddfd-export-ss (ddfd-model-ss "CABLE_ROUTE*") 'ddfd-ov-add-route nil)
+  (setq *ddfd-ov-cabs* (reverse *ddfd-ov-cabs*)
+        *ddfd-ov-shafts* (reverse *ddfd-ov-shafts*)
+        *ddfd-ov-routes* (reverse *ddfd-ov-routes*))
+  (setq floors (ddfd-wiz-layer-floors))
+  (foreach fl (append (mapcar 'car *ddfd-ov-rooms*) (mapcar 'cadr *ddfd-ov-cabs*)
+                      (mapcar 'caddr *ddfd-ov-shafts*) (mapcar 'car *ddfd-ov-routes*))
+    (if (and (/= fl "") (not (member fl floors))) (setq floors (cons fl floors))))
+  (setq floors (ddfd-wiz-sort-floors floors))
+  (if (or (ddfd-ov-floor-items *ddfd-ov-cabs* 1 "") (ddfd-ov-floor-items *ddfd-ov-shafts* 2 "")
+          (ddfd-ov-floor-items *ddfd-ov-routes* 0 ""))
+    (setq floors (append floors (list ""))))
+  (setq *ddfd-ov-floors* floors)
+  (foreach fl floors (ddfd-ov-floor-check fl))
+  (ddfd-ov-check-dups)
+  (ddfd-ov-check-rooms)
+  (ddfd-ov-check-shafts)
+  (ddfd-ov-check-paper)
+  (setq *ddfd-ov-issues* (reverse *ddfd-ov-issues*))
+  T)
+
+;; 某步某级别的问题条数；step 为 nil 时统计全部
+(defun ddfd-ov-count (step level / n r)
+  (setq n 0)
+  (foreach r *ddfd-ov-issues*
+    (if (and (= (car r) level) (or (null step) (= (cadr r) step))) (setq n (1+ n))))
+  n)
+
+(defun ddfd-ov-seg-total (/ n r)
+  (setq n 0)
+  (foreach r *ddfd-ov-routes* (setq n (+ n (caddr r))))
+  n)
+
+(defun ddfd-ov-shaft-bases (/ s res)
+  (foreach s *ddfd-ov-shafts*
+    (if (not (member (car s) res)) (setq res (cons (car s) res))))
+  (reverse res))
+
+;; 步骤状态：ok 完成、warn 有提醒、err 有错误、todo 未开始、skip 不需要
+(defun ddfd-ov-step-state (step count)
+  (cond ((> (ddfd-ov-count step "err") 0) "err")
+        ((> (ddfd-ov-count step "warn") 0) "warn")
+        ((> count 0) "ok")
+        (T "todo")))
+
+;; ((步骤号 名称 状态 说明) ...)
+(defun ddfd-ov-steps (/ real-floors exported errs)
+  (setq real-floors (vl-remove "" *ddfd-ov-floors*)
+        exported *ddfd-wiz-last-export*
+        errs (ddfd-ov-count nil "err"))
+  (list
+    (list 1 "建楼层" (if real-floors "ok" "todo") (strcat (itoa (length real-floors)) " 层"))
+    (list 2 "定义房间" (ddfd-ov-step-state 2 (length *ddfd-ov-rooms*)) (strcat (itoa (length *ddfd-ov-rooms*)) " 间"))
+    (list 3 "标柜子" (ddfd-ov-step-state 3 (length *ddfd-ov-cabs*)) (strcat (itoa (length *ddfd-ov-cabs*)) " 台"))
+    (list 4 "画通道" (ddfd-ov-step-state 4 (length *ddfd-ov-routes*))
+          (strcat (itoa (length *ddfd-ov-routes*)) " 条 " (itoa (ddfd-ov-seg-total)) " 段"))
+    (if (and (< (length real-floors) 2) (null *ddfd-ov-shafts*))
+      (list 5 "标竖井" "skip" "单层不需要")
+      (list 5 "标竖井" (ddfd-ov-step-state 5 (length *ddfd-ov-shafts*))
+            (strcat (itoa (length (ddfd-ov-shaft-bases))) " 个")))
+    (cond
+      ((> errs 0) (list 6 "检查导出" "err" (strcat (itoa errs) " 个错误")))
+      ((and exported (= (car exported) "fail")) (list 6 "检查导出" "err" "上次导出失败"))
+      (exported (list 6 "检查导出" "ok" (strcat "已导出 " (caddr exported))))
+      ((and *ddfd-ov-cabs* *ddfd-ov-routes*) (list 6 "检查导出" "todo" "可以导出"))
+      (T (list 6 "检查导出" "todo" "还没有数据")))))
+
+(defun ddfd-ov-state-mark (state)
+  (cdr (assoc state '(("ok" . "[√]") ("warn" . "[!]") ("err" . "[×]") ("todo" . "[ ]") ("skip" . "[-]")))))
+
+;; acad_strlsort 不带 lambda，柜子多时也快；出错或丢项时用原顺序
+(defun ddfd-ov-sort-names (names / sorted)
+  (if names
+    (progn
+      (setq sorted (vl-catch-all-apply 'acad_strlsort (list names)))
+      (if (or (vl-catch-all-error-p sorted) (/= (length sorted) (length names))) names sorted))))
+
+(defun ddfd-ov-floor-label (fl) (if (= fl "") "楼层未知" fl))
+
+(defun ddfd-ov-print-floor (fl / rooms cabs routes shafts outside segs r names s bases)
+  (setq rooms (ddfd-ov-floor-items *ddfd-ov-rooms* 0 fl)
+        cabs (ddfd-ov-floor-items *ddfd-ov-cabs* 1 fl)
+        routes (ddfd-ov-floor-items *ddfd-ov-routes* 0 fl)
+        shafts (ddfd-ov-floor-items *ddfd-ov-shafts* 2 fl)
+        segs 0)
+  (foreach r routes (setq segs (+ segs (caddr r))))
+  (foreach s shafts (if (not (member (car s) bases)) (setq bases (cons (car s) bases))))
+  (princ (strcat "\n" (ddfd-ov-floor-label fl) "：房间 " (itoa (length rooms)) " 间，柜子 " (itoa (length cabs)) " 台，通道 "
+                 (itoa (length routes)) " 条 " (itoa segs) " 段，竖井 "
+                 (if bases (ddfd-join (reverse bases) "、") "无")))
+  (foreach r rooms
+    (setq names (ddfd-ov-sort-names (mapcar 'car (ddfd-ov-floor-items cabs 5 (caddr r)))))
+    (princ (strcat "\n  " (cadr r) "（" (itoa (length names)) " 台）"
+                   (if names (strcat "：" (ddfd-join names "、")) ""))))
+  (setq outside (ddfd-ov-floor-items cabs 5 nil))
+  (if outside
+    (princ (strcat "\n  " (if rooms "不在任何房间" "柜子") "（" (itoa (length outside)) " 台）："
+                   (ddfd-join (ddfd-ov-sort-names (mapcar 'car outside)) "、")))))
+
+;; 竖井配对：每个竖井标到了哪些楼层
+(defun ddfd-ov-print-shafts (/ b fl line hit real-floors)
+  (setq real-floors (vl-remove "" *ddfd-ov-floors*))
+  (if *ddfd-ov-shafts*
+    (progn
+      (princ "\n竖井配对：")
+      (foreach b (ddfd-ov-shaft-bases)
+        (setq line (strcat "\n  " b "："))
+        (foreach fl real-floors
+          (setq hit (vl-remove-if-not '(lambda (s) (and (= (car s) b) (= (caddr s) fl))) *ddfd-ov-shafts*))
+          (setq line (strcat line fl (if hit "√ " "× "))))
+        (princ line)))))
+
+(defun ddfd-ov-print-issues (/ n r shown)
+  (setq n (length *ddfd-ov-issues*) shown 0)
+  (if (> n 0)
+    (progn
+      (princ (strcat "\n问题清单（错误 " (itoa (ddfd-ov-count nil "err"))
+                     "，提醒 " (itoa (ddfd-ov-count nil "warn"))
+                     "，说明 " (itoa (ddfd-ov-count nil "info")) "）："))
+      (foreach level '("err" "warn" "info")
+        (foreach r *ddfd-ov-issues*
+          (if (and (= (car r) level) (< shown 40))
+            (progn
+              (setq shown (1+ shown))
+              (princ (strcat "\n  " (cond ((= level "err") "[错误] ") ((= level "warn") "[提醒] ") (T "[说明] "))
+                             (nth 4 r)
+                             (if (/= (nth 3 r) "") (strcat "（句柄 " (nth 3 r) "）") "")))))))
+      (if (> n shown) (princ (strcat "\n  还有 " (itoa (- n shown)) " 条没列出。"))))
+    (princ "\n没有发现问题。")))
+
+(defun ddfd-ov-print (/ s fl)
+  (princ "\n=============== 定义总览 ===============")
+  (foreach s (ddfd-ov-steps)
+    (princ (strcat "\n  " (ddfd-ov-state-mark (caddr s)) " 第" (itoa (car s)) "步 " (cadr s) "：" (cadddr s))))
+  (foreach fl *ddfd-ov-floors* (ddfd-ov-print-floor fl))
+  (ddfd-ov-print-shafts)
+  (ddfd-ov-print-issues)
+  (princ))
+
+;; —— 给面板的文件 ——
+;; 中望的 open 支持 UTF-8 参数，AutoCAD 2018 不支持，退回系统编码；面板读取时自动识别
+(defun ddfd-ov-open (path / f)
+  (setq f (vl-catch-all-apply 'open (if *ddfd-ov-utf8* (list path "w" "utf8") (list path "w"))))
+  (if (vl-catch-all-error-p f) nil f))
+
+(defun ddfd-ov-temp-dir (/ d)
+  (setq d (getenv "TEMP"))
+  (if (or (null d) (= d "")) (setq d (getvar "TEMPPREFIX")))
+  (vl-string-right-trim "\\" d))
+
+;; 加载时试一次 open 的编码参数：*error* 里 vl-catch-all-apply 接不住参数错误，不能到写文件时才试
+(defun ddfd-ov-probe-open (/ tmp f)
+  (setq tmp (strcat (ddfd-ov-temp-dir) "\\ddfd-open-test.tmp")
+        f (vl-catch-all-apply 'open (list tmp "w" "utf8")))
+  (setq *ddfd-ov-utf8* (and f (not (vl-catch-all-error-p f))))
+  (if *ddfd-ov-utf8*
+    (progn (close f) (vl-file-delete tmp))))
+(ddfd-ov-probe-open)
+
+;; TAB 分隔的一项：把分隔符和换行换成空格
+(defun ddfd-ov-clean (s / c)
+  (foreach c '("\t" "\r" "\n")
+    (setq s (ddfd-string-replace-all " " c (if s s ""))))
+  s)
+
+(defun ddfd-ov-num (v) (rtos v 2 3))
+
+(defun ddfd-ov-write-row (fh cells / c first)
+  (setq first T)
+  (foreach c cells
+    (if first (setq first nil) (princ "\t" fh))
+    (princ (ddfd-ov-clean c) fh))
+  (write-line "" fh))
+
+;; 顶点直接逐个写进文件，不拼成长字符串；格式 x,y;x,y;...
+(defun ddfd-ov-write-points (fh tag cells pts / c p)
+  (princ tag fh)
+  (foreach c cells
+    (princ "\t" fh)
+    (princ (ddfd-ov-clean c) fh))
+  (princ "\t" fh)
+  (foreach p pts
+    (princ (strcat (ddfd-ov-num (car p)) "," (ddfd-ov-num (cadr p)) ";") fh))
+  (write-line "" fh))
+
+(defun ddfd-ov-now ()
+  (cond ((menucmd "M=$(edtime,$(getvar,date),YYYY-MO-DD HH:MM:SS)")) (T "")))
+
+(defun ddfd-ov-write-body (fh / r s)
+  (ddfd-ov-write-row fh (list "DDFDOVERVIEW" "1"))
+  (ddfd-ov-write-row fh (list "ID" (rtos (getvar "DATE") 2 8)))
+  (ddfd-ov-write-row fh (list "TIME" (ddfd-ov-now)))
+  (ddfd-ov-write-row fh (list "DWG" (strcat (getvar "DWGPREFIX") (getvar "DWGNAME"))))
+  (ddfd-ov-write-row fh (list "VERSION" *ddfd-cable-version*))
+  (ddfd-ov-write-row fh (list "CURFLOOR" (cond (*ddfd-wiz-floor*) (T ""))))
+  (foreach s (ddfd-ov-steps)
+    (ddfd-ov-write-row fh (list "STEP" (itoa (car s)) (cadr s) (caddr s) (cadddr s))))
+  (foreach s *ddfd-ov-floors*
+    (ddfd-ov-write-row fh (list "FLOOR" s)))
+  (foreach r *ddfd-ov-rooms*
+    (ddfd-ov-write-points fh "ROOM"
+      (list (car r) (cadr r) (caddr r) (itoa (length (ddfd-ov-room-cabs (caddr r)))))
+      (nth 3 r)))
+  (foreach r *ddfd-ov-cabs*
+    (ddfd-ov-write-row fh
+      (list "CAB" (cadr r) (car r) (caddr r) (ddfd-ov-num (nth 3 r)) (ddfd-ov-num (nth 4 r))
+            (cond ((nth 5 r)) (T "")) (nth 6 r))))
+  (foreach r *ddfd-ov-shafts*
+    (ddfd-ov-write-row fh
+      (list "SHAFT" (caddr r) (car r) (cadr r) (cadddr r) (ddfd-ov-num (nth 4 r)) (ddfd-ov-num (nth 5 r)))))
+  (foreach r *ddfd-ov-routes*
+    (ddfd-ov-write-points fh "ROUTE" (list (car r) (cadr r) (itoa (caddr r))) (nth 3 r)))
+  (foreach r *ddfd-ov-issues*
+    (ddfd-ov-write-row fh (list "ISSUE" (car r) (itoa (cadr r)) (caddr r) (nth 3 r) (nth 4 r))))
+  (if *ddfd-wiz-last-export*
+    (ddfd-ov-write-row fh (cons "EXPORT" *ddfd-wiz-last-export*))))
+
+;; %TEMP%\DDFD-Cable\overview.txt：先写 .tmp 再改名，面板不会读到半个文件。第一行 DDFDOVERVIEW 1，之后按行首分类：
+;;   ID / TIME / DWG / VERSION / CURFLOOR（向导正在处理的楼层，面板跟着切换）
+;;   STEP 步骤号 名称 状态 说明；FLOOR 楼层（空串是楼层未知）
+;;   ROOM 楼层 名称 句柄 柜子数 顶点；CAB 楼层 柜名 句柄 x y 房间句柄 房间名
+;;   SHAFT 楼层 配对名 全名 句柄 x y；ROUTE 楼层 句柄 段数 顶点
+;;   ISSUE 级别 步骤号 类别 句柄 文字；EXPORT ok或fail 目录 时间
+(defun ddfd-ov-write-file (/ dir tmp out fh result)
+  (setq dir (strcat (ddfd-ov-temp-dir) "\\DDFD-Cable")
+        tmp (strcat dir "\\overview.tmp")
+        out (strcat dir "\\overview.txt"))
+  (vl-mkdir dir)
+  (if (setq fh (ddfd-ov-open tmp))
+    (progn
+      (setq result (vl-catch-all-apply 'ddfd-ov-write-body (list fh)))
+      (close fh)
+      (if (vl-catch-all-error-p result)
+        (progn (vl-file-delete tmp) nil)
+        (progn
+          (if (findfile out) (vl-file-delete out))
+          (vl-file-rename tmp out))))))
+
+;; 问题写成 CAD 结果卡片的文件格式：装了面板的电脑上会自动弹出卡片，点条目定位到图上
+(defun ddfd-ov-write-card (/ dir tmp out fh short r)
+  (setq dir (strcat (ddfd-ov-temp-dir) "\\AA-CAD-Report")
+        tmp (strcat dir "\\report.tmp")
+        out (strcat dir "\\report.txt")
+        short (strcat "电缆检查：错误 " (itoa (ddfd-ov-count nil "err"))
+                      "，提醒 " (itoa (ddfd-ov-count nil "warn"))))
+  (vl-mkdir dir)
+  (if (setq fh (ddfd-ov-open tmp))
+    (progn
+      (ddfd-ov-write-row fh (list "AAREPORT" "1"))
+      (ddfd-ov-write-row fh (list "ID" (strcat (rtos (getvar "DATE") 2 8) "-DDFD_CHECK")))
+      (ddfd-ov-write-row fh (list "CMD" "电缆检查"))
+      (ddfd-ov-write-row fh (list "TIME" (ddfd-ov-now)))
+      (ddfd-ov-write-row fh (list "DWG" (strcat (getvar "DWGPREFIX") (getvar "DWGNAME"))))
+      (ddfd-ov-write-row fh (list "SHORT" short))
+      (ddfd-ov-write-row fh (list "SUM" short))
+      (foreach r *ddfd-ov-issues*
+        (ddfd-ov-write-row fh (list "ITEM" (car r) (caddr r) (nth 3 r) (nth 4 r))))
+      (close fh)
+      (if (findfile out) (vl-file-delete out))
+      (vl-file-rename tmp out))))
+
+;; 重新读图并写总览文件。只是给面板看的，出错只提示一句，不影响刚做完的步骤
+(defun ddfd-ov-refresh (/ result)
+  (setq result (vl-catch-all-apply 'ddfd-ov-collect nil))
+  (if (vl-catch-all-error-p result)
+    (progn (princ (strcat "\n读取定义总览时出错: " (vl-catch-all-error-message result))) nil)
+    (progn
+      (setq result (vl-catch-all-apply 'ddfd-ov-write-file nil))
+      (if (vl-catch-all-error-p result)
+        (princ (strcat "\n写定义总览文件时出错: " (vl-catch-all-error-message result))))
+      T)))
+
+;; 体检：刷新总览，弹结果卡片
+(defun ddfd-ov-check ()
+  (if (ddfd-ov-refresh)
+    (progn
+      (vl-catch-all-apply 'ddfd-ov-write-card nil)
+      T)))
+
+;; 按句柄缩放到对象并选中。文字、块放大到能看清周围，房间、通道看全整个对象
+(defun ddfd:zoom (h / en ed pts box cx cy size w)
+  (if (and h (setq en (handent h)) (setq ed (entget en)))
+    (progn
+      (setq pts (if (wcmatch (cdr (assoc 0 ed)) "*POLYLINE")
+                  (ddfd-room-vertices en)
+                  (list (cdr (assoc 10 ed))))
+            box (ddfd-ov-bbox pts)
+            cx (/ (+ (car box) (caddr box)) 2.0)
+            cy (/ (+ (cadr box) (cadddr box)) 2.0)
+            size (max (- (caddr box) (car box)) (- (cadddr box) (cadr box)) (cond ((cdr (assoc 40 ed))) (T 1.0)))
+            w (* size (if (cdr pts) 1.2 8.0)))
+      (command "_.ZOOM" "_W"
+               (trans (list (- cx w) (- cy (* 0.6 w)) 0.0) 0 1)
+               (trans (list (+ cx w) (+ cy (* 0.6 w)) 0.0) 0 1))
+      (sssetfirst nil (ssadd en))
+      (princ (strcat "\n已定位到对象 " h)))
+    (princ (strcat "\n找不到对象 " (if h h "") "（可能已删除，或不在当前图纸）")))
+  (princ))
+
+;; 结果卡片点条目时发的是 aa:rep-zoom：没加载 AA 整合版本时用这里的定位
+(if (not aa:rep-zoom)
+  (defun aa:rep-zoom (h) (ddfd:zoom h)))
+
+;; —— 第6步：检查并导出到实际桌面（网页版专用） ——
 ;; 依次尝试：Shell Folders（已解析路径，兼容桌面重定向、中文路径及 OneDrive 桌面）→
 ;; User Shell Folders（可能含 %USERPROFILE% 等变量，展开后再用）→ %USERPROFILE%\Desktop；返回第一个存在的目录
 (defun ddfd-wiz-reg-folder (key / result)
@@ -1243,8 +1914,8 @@
     (if (and (not res) dir (vl-file-directory-p dir)) (setq res dir)))
   res)
 
-(defun ddfd-wiz-step5 (/ desktop outdir)
-  (princ "\n———— 第5步：导出数据到桌面 ————")
+;; 导出四个CSV到桌面，结果记进 *ddfd-wiz-last-export*，面板从总览文件里读。成功返回 T
+(defun ddfd-wiz-export-run (/ desktop outdir ok)
   (setq desktop (ddfd-wiz-desktop-folder))
   (if desktop
     (progn
@@ -1252,14 +1923,29 @@
       (if (not (wcmatch outdir "*\\"))
         (setq outdir (strcat outdir "\\")))
       (princ (strcat "\n自动导出目录：" outdir))
-      (if (ddfd-do-export outdir)
+      (setq ok (ddfd-do-export outdir))
+      (setq *ddfd-wiz-last-export* (list (if ok "ok" "fail") outdir (ddfd-ov-now)))
+      (if ok
         (progn
           (princ (strcat "\n已导出到桌面：" outdir))
-          (princ "\n文件：柜子坐标.csv、路径线段.csv、竖井.csv、房间范围.csv。")
-          (princ "\n请回到网页版“电缆统计”，将这四个CSV拖入导入区域，点击“上传并保存”。")
-          (if (ddfd-wiz-yesno "\n现在打开网页版工作台吗?" "N")
-            (startapp "explorer.exe" *ddfd-web-url*)))))
-    (princ "\n无法读取或访问 Windows 桌面目录，未导出任何数据。可改用 DDFD_EXPORT_CABLE_ROUTE 手动指定导出目录。"))
+          (princ "\n文件：柜子坐标.csv、路径线段.csv、竖井.csv、房间范围.csv。"))))
+    (progn
+      (setq *ddfd-wiz-last-export* (list "fail" "" (ddfd-ov-now)))
+      (princ "\n无法读取或访问 Windows 桌面目录，未导出任何数据。可改用 DDFD_EXPORT_CABLE_ROUTE 手动指定导出目录。")))
+  ok)
+
+(defun ddfd-wiz-step6 (/ errs)
+  (princ "\n———— 第6步：检查导出 ————")
+  (if (ddfd-ov-check) (ddfd-ov-print))
+  (setq errs (ddfd-ov-count nil "err"))
+  (if (or (= errs 0)
+          (ddfd-wiz-yesno (strcat "\n还有 " (itoa errs) " 个错误，导出的数据可能不完整。仍然导出吗?") "N"))
+    (if (ddfd-wiz-export-run)
+      (progn
+        (princ "\n请回到网页版“电缆统计”，将这四个CSV拖入导入区域，点击“上传并保存”。")
+        (if (ddfd-wiz-yesno "\n现在打开网页版工作台吗?" "N")
+          (startapp "explorer.exe" *ddfd-web-url*))))
+    (princ "\n已取消导出。改好后再运行第6步。"))
   (princ))
 
 ;; 保存并恢复用户环境（捕捉模式、当前图层）
@@ -1275,83 +1961,110 @@
 ;; 按需连跑全部步骤，每步之间确认
 (defun ddfd-wiz-all (/ go)
   (setq go T)
-  (ddfd-wiz-step1)
-  (if go (if (ddfd-wiz-yesno "\n第1步完成。继续定义房间?" "Y") (ddfd-wiz-step-rooms) (setq go nil)))
-  (if go (if (ddfd-wiz-yesno "\n房间定义完成。进入第2步(标柜子)?" "Y") (ddfd-wiz-step2) (setq go nil)))
-  (if go (if (ddfd-wiz-yesno "\n第2步完成。进入第3步(画路径)?" "Y") (ddfd-wiz-step3) (setq go nil)))
-  (if go (if (ddfd-wiz-yesno "\n第3步完成。进入第4步(标竖井)?" "Y") (ddfd-wiz-step4) (setq go nil)))
-  (if go (if (ddfd-wiz-yesno "\n第4步完成。进入第5步(导出到桌面)?" "Y") (ddfd-wiz-step5) (setq go nil)))
+  (ddfd-wiz-step1 nil)
+  (if go (if (ddfd-wiz-yesno "\n第1步完成。进入第2步(定义房间)?" "Y") (ddfd-wiz-step2 nil) (setq go nil)))
+  (if go (if (ddfd-wiz-yesno "\n第2步完成。进入第3步(标柜子)?" "Y") (ddfd-wiz-step3 nil) (setq go nil)))
+  (if go (if (ddfd-wiz-yesno "\n第3步完成。进入第4步(画通道)?" "Y") (ddfd-wiz-step4 nil) (setq go nil)))
+  (if go (if (ddfd-wiz-yesno "\n第4步完成。进入第5步(标竖井)?" "Y") (ddfd-wiz-step5) (setq go nil)))
+  (if go (if (ddfd-wiz-yesno "\n第5步完成。进入第6步(检查导出)?" "Y") (ddfd-wiz-step6) (setq go nil)))
   (if (not go)
     (princ "\n已停在当前步骤。之后输入 DDFD_CABLE_WIZARD 可从任意步骤继续。")
   )
 )
 
-(defun ddfd-wiz-run (stepno / *error*)
+;; stepno：0 全部，1~6 对应六步，7 只导出（面板用）。arg：第1步是楼层文字，第2~4步是楼层，nil 表示在命令行问。
+;; 每步结束都刷新总览文件，面板随之更新
+(defun ddfd-wiz-run (stepno arg / *error*)
   (setq *ddfd-wiz-oldos* (getvar "OSMODE"))
   (setq *ddfd-wiz-oldlayer* (getvar "CLAYER"))
   (defun *error* (msg)
     (ddfd-wiz-restore)
     (princ (strcat "\n已中断: " msg))
     (princ "\n可重新输入 DDFD_CABLE_WIZARD 从任意步骤继续。")
+    (ddfd-ov-refresh)
     (princ)
   )
   (cond
     ((= stepno 0) (ddfd-wiz-all))
-    ((= stepno 1) (ddfd-wiz-step1))
-    ((= stepno 2) (ddfd-wiz-step2))
-    ((= stepno 3) (ddfd-wiz-step3))
-    ((= stepno 4) (ddfd-wiz-step4))
+    ((= stepno 1) (ddfd-wiz-step1 arg))
+    ((= stepno 2) (ddfd-wiz-step2 arg))
+    ((= stepno 3) (ddfd-wiz-step3 arg))
+    ((= stepno 4) (ddfd-wiz-step4 arg))
     ((= stepno 5) (ddfd-wiz-step5))
-    ((= stepno 6) (ddfd-wiz-step-rooms))
+    ((= stepno 6) (ddfd-wiz-step6))
+    ((= stepno 7) (ddfd-wiz-export-run))
   )
   (ddfd-wiz-restore)
+  (ddfd-ov-refresh)
   (princ)
 )
 
-;; 带说明的步骤菜单，选步骤前先能看到每一步是干什么的
-(defun ddfd-wiz-menu ()
+;; 菜单每行带上这一步的当前状态，一眼能看出做到哪了
+(defun ddfd-wiz-menu-line (key step desc / s)
+  (setq s (assoc step (ddfd-ov-steps)))
+  (princ (strcat "\n  [" key "] " (ddfd-ov-state-mark (caddr s)) " " (cadr s) "  " (cadddr s) " - " desc)))
+
+(defun ddfd-wiz-menu (ok)
   (princ "\n=============== 电缆长度统计 · 引导向导 ===============")
-  (princ "\n  [A] 从头一步步来（新图推荐，依次执行 1→5，含房间定义）")
-  (princ "\n  [1] 建图层   - 输入楼层数，自动建 柜子/路径/竖井/房间 四类图层")
-  (princ "\n  [R] 定义房间 - 选择闭合多段线并输入房间名称（已定义的再选一次可改名）")
-  (princ "\n  [C] 检查房间 - 列出将导出的房间，定位房间图层上未命名/无效的多段线")
-  (princ "\n  [2] 标柜子   - 在柜后出线点点一下+输柜名，自动写文字")
-  (princ "\n  [3] 画路径   - 沿电缆沟/桥架中心画多段线，自动开端点捕捉")
-  (princ "\n  [4] 标竖井   - 跨楼层电缆用，自动写 ZJn_楼层 配对文字")
-  (princ "\n  [5] 导出桌面 - 自动导出四个CSV到桌面，回网页上传计算")
+  (if ok
+    (progn
+      (ddfd-wiz-menu-line "1" 1 "写出图纸的楼层，自动建 4 类图层")
+      (ddfd-wiz-menu-line "2" 2 "选闭合多段线，输入房间名称（再选一次可改名）")
+      (ddfd-wiz-menu-line "3" 3 "在柜后出线点点一下，输入柜名")
+      (ddfd-wiz-menu-line "4" 4 "沿电缆沟/桥架中心线画多段线")
+      (ddfd-wiz-menu-line "5" 5 "跨楼层电缆用，自动写 ZJn_楼层 配对文字")
+      (ddfd-wiz-menu-line "6" 6 "体检后把四个CSV导出到桌面"))
+    (princ "\n  （读取当前状态失败，步骤仍可使用）\n  [1] 建楼层  [2] 定义房间  [3] 标柜子  [4] 画通道  [5] 标竖井  [6] 检查导出"))
+  (princ "\n  [A] 从头一步步来（新图推荐）")
+  (princ "\n  [L] 查看定义总览：每层的房间、柜子、通道、竖井")
   (princ "\n  [Q] 退出向导")
   (princ)
 )
+
+(defun ddfd-wiz-list ()
+  (if (ddfd-ov-check) (ddfd-ov-print))
+  (princ))
 
 (defun c:DDFD_CABLE_WIZARD (/ choice first done)
   (setq first T)
   (setq done nil)
   (while (not done)
-    (ddfd-wiz-menu)
-    (initget "A R C 1 2 3 4 5 Q")
-    (setq choice (getkword (strcat "\n选择要做的步骤 [A/R/C/1/2/3/4/5/Q] <" (if first "A" "Q") ">: ")))
+    (ddfd-wiz-menu (ddfd-ov-refresh))
+    (initget "1 2 3 4 5 6 A L Q")
+    (setq choice (getkword (strcat "\n选择要做的步骤 [1/2/3/4/5/6/A/L/Q] <" (if first "A" "Q") ">: ")))
     (if (not choice) (setq choice (if first "A" "Q")))
     (setq first nil)
     (cond
       ((= choice "Q") (setq done T))
-      ((= choice "A") (ddfd-wiz-run 0) (setq done T))
-      ((= choice "R") (ddfd-wiz-run 6))
-      ((= choice "C") (c:DDFD_ROOM_CHECK))
-      (T (ddfd-wiz-run (atoi choice)))
+      ((= choice "A") (ddfd-wiz-run 0 nil) (setq done T))
+      ((= choice "L") (ddfd-wiz-list))
+      (T (ddfd-wiz-run (atoi choice) nil))
     )
   )
-  (princ "\n向导已退出，单步做完会回到菜单；随时输入 DDFD_CABLE_WIZARD 再进。")
+  (princ "\n向导已退出，单步做完会回到菜单；随时输入 DCW 或 DDFD_CABLE_WIZARD 再进。")
   (princ)
 )
 
-(defun c:DDFD_CABLE_LAYERS () (ddfd-wiz-run 1))
-(defun c:DDFD_CABLE_ROOMS () (ddfd-wiz-run 6))
-(defun c:DDFD_CABLE_CABINETS () (ddfd-wiz-run 2))
-(defun c:DDFD_CABLE_ROUTES () (ddfd-wiz-run 3))
-(defun c:DDFD_CABLE_SHAFTS () (ddfd-wiz-run 4))
-(defun c:DDFD_CABLE_EXPORT_RUN () (ddfd-wiz-run 5))
+(defun c:DCW () (c:DDFD_CABLE_WIZARD))
+(defun c:DCV () (ddfd-wiz-list))
+(defun c:DDFD_CABLE_LIST () (ddfd-wiz-list))
+(defun c:DDFD_CABLE_LAYERS () (ddfd-wiz-run 1 nil))
+(defun c:DDFD_CABLE_ROOMS () (ddfd-wiz-run 2 nil))
+(defun c:DDFD_CABLE_CABINETS () (ddfd-wiz-run 3 nil))
+(defun c:DDFD_CABLE_ROUTES () (ddfd-wiz-run 4 nil))
+(defun c:DDFD_CABLE_SHAFTS () (ddfd-wiz-run 5 nil))
+(defun c:DDFD_CABLE_EXPORT_RUN () (ddfd-wiz-run 6 nil))
 
-(princ (strcat "\n已加载电缆统计引导向导（版本 " *ddfd-cable-version* "）。输入 DDFD_CABLE_WIZARD 开始一步步操作。"))
-(princ "\n分步命令: DDFD_CABLE_LAYERS 建图层 | DDFD_CABLE_ROOMS 定义房间 | DDFD_CABLE_CABINETS 标柜子 | DDFD_CABLE_ROUTES 画路径 | DDFD_CABLE_SHAFTS 标竖井 | DDFD_CABLE_EXPORT_RUN 导出到桌面 | DDFD_EXPORT_CABLE_ROUTE 仅导出")
-(princ "\n房间检查: DDFD_ROOM_CHECK 定位房间图层上的问题图形 | DDFD_CLEAN_ROOM_LAYERS 把未命名的移到 0 层")
+;; —— 面板调用入口：SendCommand 发 (ddfd:cabinets "2F") 这样的表达式，发之前面板要确认 CMDACTIVE 为 0 ——
+(defun ddfd:floors (spec) (ddfd-wiz-run 1 spec))
+(defun ddfd:rooms (floor) (ddfd-wiz-run 2 floor))
+(defun ddfd:cabinets (floor) (ddfd-wiz-run 3 floor))
+(defun ddfd:routes (floor) (ddfd-wiz-run 4 floor))
+(defun ddfd:shafts () (ddfd-wiz-run 5 nil))
+(defun ddfd:export () (ddfd-wiz-run 7 nil))
+(defun ddfd:refresh () (ddfd-ov-refresh) (princ))
+(defun ddfd:check () (ddfd-ov-check) (princ))
+
+(princ (strcat "\n已加载电缆统计引导向导（版本 " *ddfd-cable-version* "）。输入 DCW 打开向导，DCV 查看定义总览。"))
+(princ "\n六步: 1建楼层 → 2定义房间 → 3标柜子 → 4画通道 → 5标竖井 → 6检查导出")
 (princ)
