@@ -29,7 +29,7 @@
             <div class="mark">⚡</div>
             <p class="eyebrow">SECONDARY ENGINEERING / 2CI</p>
             <h1>电气二次<br>设计工作台</h1>
-            <p class="muted">从清册到路径，从端子到接线。</p>
+            <p class="muted">从清册到路径，自动统计电缆长度。</p>
             <label>
                 工作台访问密码
                 <input id="password" type="password" autocomplete="current-password" placeholder="请输入工作台密码" required>
@@ -59,15 +59,13 @@
             </div>
 
             <nav>
-                <button data-page="validation"><span>V2</span>项目检查</button>
-                <button data-page="terminal"><span>01</span>端子排出图</button>
-                <button data-page="overview" class="active"><span>02</span>工程总览</button>
-                <button data-page="cables"><span>03</span>电缆统计</button>
-                <button data-page="params"><span>04</span>计算参数</button>
-                <button data-page="aliases"><span>05</span>柜名匹配</button>
-                <button data-page="issues"><span>06</span>问题清单</button>
-                <button data-page="outputs"><span>07</span>输出文件</button>
-                <button data-page="guide"><span>08</span>CAD 数据导出</button>
+                <button data-page="overview" class="active"><span>01</span>工程总览</button>
+                <button data-page="cables"><span>02</span>电缆统计</button>
+                <button data-page="params"><span>03</span>计算参数</button>
+                <button data-page="aliases"><span>04</span>柜名匹配</button>
+                <button data-page="issues"><span>05</span>问题清单</button>
+                <button data-page="outputs"><span>06</span>输出文件</button>
+                <button data-page="guide"><span>07</span>CAD 数据导出</button>
             </nav>
 
             <div class="aside-footer">
@@ -119,6 +117,6 @@
         </form>
     </dialog>
 
-    <script src="/static/app.js?v=20261102-six-steps"></script>
+    <script src="/static/app.js?v=20261102-drop-terminal-2"></script>
 </body>
 </html>

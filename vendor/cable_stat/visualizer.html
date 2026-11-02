@@ -80,6 +80,7 @@
     .drawer ol { list-style: none; margin: 0; padding: 8px 16px 20px; overflow: auto; }
     .drawer li { display: flex; gap: 8px; padding: 7px 0; border-bottom: 1px dashed var(--line); font-size: 13px; line-height: 1.5; }
     .drawer li.cont { padding-left: 18px; }
+    .drawer li.current { background: #fff4e5; box-shadow: inset 3px 0 0 #c43c32; padding-left: 8px; margin: 0 -8px; padding-right: 8px; }
     .lvl { flex: none; font-size: 11px; border-radius: 4px; padding: 1px 6px; height: fit-content; color: #fff; }
     .lvl-错误 { background: var(--bad); }
     .lvl-警告 { background: var(--warn); }
@@ -674,6 +675,7 @@
         renderFloorTabs();
       }
       state.gapReturnFloor = null;
+      gapFromIssues = false;
       setGapVisibility(false);
       clearTimeout(pickTimer);
       gapHits = [];
@@ -686,9 +688,13 @@
       document.getElementById("gapInfo").style.display = "none";
       document.getElementById("detail").style.display = "";
     }
-    function focusGap(index) {
+    // 从问题清单点进来的检查点，卡片上提供“返回问题清单”，回到原来的筛选和滚动位置
+    let gapFromIssues = false;
+    let issueScrollTop = 0;
+    function focusGap(index, fromIssues) {
       const gap = data.gaps[index];
       if (!gap) return;
+      if (fromIssues !== undefined) gapFromIssues = fromIssues;
       if (state.gap < 0) state.gapReturnFloor = state.floor;
       setGapVisibility(true);
       state.gap = index;
@@ -717,10 +723,27 @@
         <p>本来应该连通：在 CAD 把线头接上，再导出计算。<br>本来就应分开：可以忽略此提醒。</p>
         <button type="button" id="gapPrevious" ${index===0?"disabled":""}>上一处</button>
         <button type="button" id="gapNext" ${index===data.gaps.length-1?"disabled":""}>下一处</button>
+        ${gapFromIssues ? '<button type="button" id="gapBackIssues">返回问题清单</button>' : ""}
         <button type="button" id="gapExit">隐藏检查点，返回路径</button>`;
       document.getElementById("gapPrevious").onclick = () => focusGap(index-1);
       document.getElementById("gapNext").onclick = () => focusGap(index+1);
       document.getElementById("gapExit").onclick = () => { clearGap(); renderMap(); };
+      const back = document.getElementById("gapBackIssues");
+      if (back) back.onclick = () => openIssues(true);
+    }
+    // 打开问题清单；backToGap 时保持原筛选和滚动位置，并标出当前检查点那一条
+    function openIssues(backToGap) {
+      renderIssues();
+      drawer.classList.add("open");
+      const list = document.getElementById("issueList");
+      if (!backToGap) return;
+      list.scrollTop = issueScrollTop;
+      const row = list.querySelector(`li[data-gap="${state.gap}"]`);
+      if (row) {
+        const top = row.offsetTop - list.offsetTop, bottom = top + row.offsetHeight;
+        if (top < list.scrollTop || bottom > list.scrollTop + list.clientHeight) row.scrollIntoView({ block: "center" });
+        row.querySelector("button")?.focus({ preventScroll: true });
+      }
     }
     const gapSelect = document.getElementById("gapSelect");
     gapSelect.options[0].textContent = data.gaps.length ? `查看 ${data.gaps.length} 处未接上的位置` : "未发现疑似断点";
@@ -731,7 +754,7 @@
       option.textContent = `${index+1} · ${gap.floor || "未知楼层"} · 间隙 ${gapDistance(gap)}`;
       gapSelect.appendChild(option);
     });
-    gapSelect.onchange = () => { if(gapSelect.value !== "") focusGap(Number(gapSelect.value)); else {clearGap();renderMap();} };
+    gapSelect.onchange = () => { if(gapSelect.value !== "") focusGap(Number(gapSelect.value), false); else {clearGap();renderMap();} };
     let issueLevel = "ALL";
     const problemCount = issues.filter(item => item.level === "错误" || item.level === "警告").filter(item => !item.text.startsWith(" ")).length;
     const issueCountEl = document.getElementById("issueCount");
@@ -765,8 +788,10 @@
         if (item.gapIndex !== undefined) {
           const gap = data.gaps[item.gapIndex];
           li.lastElementChild.textContent = `检查点 ${item.gapIndex+1}：${gap.floor || "未知楼层"} 有一处线路差 ${gapDistance(gap)} 没接上。${gap.bridging ? "可能导致电缆算不出来。" : "可能导致绕远。"}`;
+          li.dataset.gap = item.gapIndex;
+          if (item.gapIndex === state.gap) li.classList.add("current");
           const locate = document.createElement("button"); locate.type="button"; locate.textContent="在图上查看";
-          locate.onclick=()=>focusGap(item.gapIndex); li.appendChild(locate);
+          locate.onclick=()=>{ issueScrollTop = list.scrollTop; focusGap(item.gapIndex, true); }; li.appendChild(locate);
         } else if (item.text.startsWith("提示：已自动连通")) {
           li.lastElementChild.textContent = item.text.replace(/^提示：/, "").replace(/（.*）/, "，已经接好，无需处理。");
         }
@@ -774,8 +799,8 @@
       });
     }
     document.getElementById("issuesBtn").addEventListener("click", () => {
-      renderIssues();
-      drawer.classList.toggle("open");
+      if (drawer.classList.contains("open")) drawer.classList.remove("open");
+      else openIssues(state.gap >= 0 && gapFromIssues);
     });
     document.getElementById("drawerClose").addEventListener("click", () => drawer.classList.remove("open"));
     function collectBoundsPoints(cable) {

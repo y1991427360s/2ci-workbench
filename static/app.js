@@ -1,8 +1,7 @@
 let csrf = '', current = null, page = 'overview', projects = [], dirty = false, busy = false;
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const titles = { overview: '工程总览', cables: '电缆统计', params: '计算参数', aliases: '柜名匹配', terminal: '端子排出图', issues: '问题清单', outputs: '输出文件', guide: 'CAD 数据导出' };
-titles.validation = '项目检查';
+const titles = { overview: '工程总览', cables: '电缆统计', params: '计算参数', aliases: '柜名匹配', issues: '问题清单', outputs: '输出文件', guide: 'CAD 数据导出' };
 
 // 主题切换逻辑 (对齐 sentools)
 function updateThemeUI() {
@@ -160,7 +159,7 @@ async function render() {
     $('#export').href = current ? '/api/projects/' + current.id + '/export' : '#';
     const c = $('#content');
     if (!current && page !== 'guide') {
-        c.innerHTML = '<div class="empty"><div class="mark">⚡</div><h2>从一个工程开始</h2><p class="muted">工程里的清册、CAD 数据、端子输入与成果会一起保存。</p><button class="primary" id="first-project">＋ 新建工程</button></div>';
+        c.innerHTML = '<div class="empty"><div class="mark">⚡</div><h2>从一个工程开始</h2><p class="muted">工程里的清册、CAD 数据与计算成果会一起保存。</p><button class="primary" id="first-project">＋ 新建工程</button></div>';
         $('#first-project').onclick = () => $('#create-dialog').showModal();
         return;
     }
@@ -168,9 +167,7 @@ async function render() {
     if (page === 'cables') cables(c);
     if (page === 'params') await parameters(c);
     if (page === 'aliases') await aliases(c);
-    if (page === 'terminal') await terminal(c);
     if (page === 'issues') issues(c);
-    if (page === 'validation') await projectValidation(c);
     if (page === 'outputs') outputs(c);
     if (page === 'guide') guide(c);
 }
@@ -269,7 +266,7 @@ function bindUpload() {
 }
 
 function overview(c) {
-    c.innerHTML = '<div class="hero"><p class="eyebrow">PROJECT / 当前工程</p><h2>' + esc(current.name) + '</h2><p>上传 CAD 路径与清册，计算电缆长度；粘贴端子排与接线，生成可编辑 DXF。成果与输入随工程实时隔离保存。</p></div>' + stats() + '<div class="grid"><div class="panel"><h3>工程输入状态</h3>' + statusTable() + '</div><div class="panel"><h3>设计流程向导</h3><div class="steps"><p>在 CAD 中导出柜子坐标、路径线段与竖井数据</p><p>上传清册与 CSV，核对计算参数及柜名匹配</p><p>计算长度并在线复核二维 / 三维可视化路径</p><p>检查端子接线，下载 DXF 格式工程成果图</p></div><div class="actions"><button data-goto="cables" class="primary">前往电缆统计 →</button><button data-goto="terminal">端子排出图 →</button></div></div></div>' + uploadBlock();
+    c.innerHTML = '<div class="hero"><p class="eyebrow">PROJECT / 当前工程</p><h2>' + esc(current.name) + '</h2><p>上传 CAD 路径与清册，计算电缆长度，在线复核二维 / 三维路径。成果与输入随工程实时隔离保存。</p></div>' + stats() + '<div class="grid"><div class="panel"><h3>工程输入状态</h3>' + statusTable() + '</div><div class="panel"><h3>设计流程向导</h3><div class="steps"><p>在 CAD 中导出柜子坐标、路径线段与竖井数据</p><p>上传清册与 CSV，核对计算参数及柜名匹配</p><p>计算长度并在线复核二维 / 三维可视化路径</p><p>查看问题清单，下载计算结果工作簿</p></div><div class="actions"><button data-goto="cables" class="primary">前往电缆统计 →</button></div></div></div>' + uploadBlock();
     bindUpload();
     bindGoto();
 }
@@ -429,15 +426,15 @@ async function terminal(c) {
 
 function issues(c) {
     const rows = [...(current.result?.issues || []).map(x => ['电缆', x[0], x[1]]), ...(current.terminalIssues || []).map(x => ['端子', x[0], x[1]])];
-    c.innerHTML = '<div class="panel"><h3>问题清单 · ' + rows.length + ' 条</h3><p class="muted" style="margin-bottom:16px">电缆问题来自最近一次计算；端子问题来自本次输入检查。</p>' + table(['来源', '级别', '说明'], rows.map(r => [esc(r[0]), '<span class="badge ' + (r[1] === '错误' ? 'error' : 'warn') + '">' + esc(r[1]) + '</span>', esc(r[2])])) + (rows.length ? '' : '<p class="muted">暂无问题记录。运行计算或端子检查后在此查看详情。</p>') + '</div>';
+    c.innerHTML = '<div class="panel"><h3>问题清单 · ' + rows.length + ' 条</h3><p class="muted" style="margin-bottom:16px">问题来自最近一次电缆计算。</p>' + table(['来源', '级别', '说明'], rows.map(r => [esc(r[0]), '<span class="badge ' + (r[1] === '错误' ? 'error' : 'warn') + '">' + esc(r[1]) + '</span>', esc(r[2])])) + (rows.length ? '' : '<p class="muted">暂无问题记录。运行计算后在此查看详情。</p>') + '</div>';
 }
 
 function outputs(c) {
-    c.innerHTML = '<div class="panel"><h3>工程成果文件</h3>' + table(['成果文件', '文件大小', '快捷操作'], current.outputs.map(f => [esc(f.name), Math.ceil(f.size / 1024) + ' KB', '<a class="button" style="height:30px;padding:0 14px;font-size:0.8rem" href="' + link(f.name) + '" ' + (f.name.endsWith('.html') ? 'target="_blank"' : '') + '>' + (f.name.endsWith('.html') ? '打开复核 ↗' : '下载 ↓') + '</a>'])) + (current.outputs.length ? '' : '<p class="muted">计算电缆或生成端子图后，工程成果将显示在这里。</p>') + '</div>';
+    c.innerHTML = '<div class="panel"><h3>工程成果文件</h3>' + table(['成果文件', '文件大小', '快捷操作'], current.outputs.map(f => [esc(f.name), Math.ceil(f.size / 1024) + ' KB', '<a class="button" style="height:30px;padding:0 14px;font-size:0.8rem" href="' + link(f.name) + '" ' + (f.name.endsWith('.html') ? 'target="_blank"' : '') + '>' + (f.name.endsWith('.html') ? '打开复核 ↗' : '下载 ↓') + '</a>'])) + (current.outputs.length ? '' : '<p class="muted">计算电缆后，工程成果将显示在这里。</p>') + '</div>';
 }
 
 function guide(c) {
-    c.innerHTML = '<div class="hero"><p class="eyebrow">CAD DATA / 数据导出向导</p><h2>从图纸提取路径，在网页完成计算</h2><p>使用原版完整 CAD 导出向导，一键从 CAD 提取设备、路径与竖井数据，上传至当前工程即可完成自动化设计计算。</p></div><div class="panel"><div class="actions"><a class="button primary" href="/static/cad_cable_wizard.lsp" download>↓ 下载 CAD 导出向导 (AutoLISP)</a></div><div class="steps"><p>在 AutoCAD / ZWCAD 中输入 APPLOAD 命令，加载下载的 LISP 向导程序。</p><p>在命令行输入 DCW 打开向导，按六步依次建楼层、定义房间、标柜子、画通道、标竖井，随时输入 DCV 查看已定义内容。</p><p>在向导第 6 步检查后，自动将四个 CSV 导出到桌面，无需选择文件夹。</p><p>进入网页版「电缆统计」模块，上传原始工程清册，将桌面导出的四个 CSV 拖入导入区域并保存。</p><p>核对计算参数与柜名映射，点击计算并打开二维 / 三维路径可视化复核。</p></div><h3 style="margin-top:24px">端子与接线输入示例</h3><div class="grid"><pre>端子排输入示例：\nX、1、2、3\nZD、1、11</pre><pre>接线输入示例：\nX:1、A610\nX:2、B903、甲柜\nX:3、701、乙柜</pre></div><p class="muted" style="margin-top:14px">同一根电缆只在最后一条填去向柜。坐标格式的端子名称行须以「端子名」结尾。普通格式与坐标格式不能混用。</p></div>';
+    c.innerHTML = '<div class="hero"><p class="eyebrow">CAD DATA / 数据导出向导</p><h2>从图纸提取路径，在网页完成计算</h2><p>使用原版完整 CAD 导出向导，一键从 CAD 提取设备、路径与竖井数据，上传至当前工程即可完成自动化设计计算。</p></div><div class="panel"><div class="actions"><a class="button primary" href="/static/cad_cable_wizard.lsp" download>↓ 下载 CAD 导出向导 (AutoLISP)</a></div><div class="steps"><p>在 AutoCAD / ZWCAD 中输入 APPLOAD 命令，加载下载的 LISP 向导程序。</p><p>在命令行输入 DCW 打开向导，按六步依次建楼层、定义房间、标柜子、画通道、标竖井，随时输入 DCV 查看已定义内容。</p><p>在向导第 6 步检查后，自动将四个 CSV 导出到桌面，无需选择文件夹。</p><p>进入网页版「电缆统计」模块，上传原始工程清册，将桌面导出的四个 CSV 拖入导入区域并保存。</p><p>核对计算参数与柜名映射，点击计算并打开二维 / 三维路径可视化复核。</p></div></div>';
 }
 
 async function navigate(next) {
