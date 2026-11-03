@@ -210,6 +210,7 @@ def build_visualization_data(
     visual_cables: list[dict[str, Any]],
     issues: list[str],
     floor_offsets: dict[str, dict[str, float]] | None = None,
+    cabinet_duplicates: list[Cabinet] | None = None,
 ) -> dict[str, Any]:
     floors = sorted(set(collect_floors(segments, cabinets, shafts)) | {room.floor for room in rooms if room.floor}, key=floor_sort_key)
     if floor_offsets is None:
@@ -245,6 +246,8 @@ def build_visualization_data(
         "floor_offsets": floor_offsets,
         "route_segments": [route_segment_to_visual(seg) for seg in segments],
         "cabinets": [cabinet_to_visual(cab) for cab in sorted(unique_cabinets, key=lambda item: (floor_sort_key(item.floor), item.name))],
+        # 因重名没参与计算的柜子，只给问题清单定位用
+        "cabinet_duplicates": [cabinet_to_visual(cab) for cab in cabinet_duplicates or []],
         "shafts": [shaft_to_visual(shaft) for shaft in sorted(shafts, key=lambda item: (floor_sort_key(item.floor), item.shaft_id))],
         "rooms": [room_to_visual(room) for room in sorted(rooms, key=lambda item: (floor_sort_key(item.floor), item.name))],
         "nodes": [visual_node(graph, node_id) for node_id in sorted(graph.nodes, key=lambda n: int(n[1:]))] if graph else [],

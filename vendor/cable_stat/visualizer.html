@@ -373,6 +373,7 @@
     </section>
     <aside class="detail">
       <div id="gapInfo" style="display:none;background:#fff;border:2px solid #c43c32;border-radius:8px;margin:12px;padding:12px;font-size:13px;overflow:auto"></div>
+      <div id="targetInfo" style="display:none;background:#fff;border:2px solid #c43c32;border-radius:8px;margin:12px;padding:12px;font-size:13px;overflow:auto"></div>
       <div id="detail" class="detail-inner"></div>
     </aside>
   </main>
@@ -669,6 +670,7 @@
       renderMap();
     });
     function clearGap() {
+      clearTarget();
       if (state.gap >= 0) {
         resetCamera();
         if (state.gapReturnFloor !== null) state.floor = state.gapReturnFloor;
@@ -738,12 +740,99 @@
       const list = document.getElementById("issueList");
       if (!backToGap) return;
       list.scrollTop = issueScrollTop;
-      const row = list.querySelector(`li[data-gap="${state.gap}"]`);
+      const row = state.target ? list.querySelector(`li[data-issue="${state.target.issue}"]`) : list.querySelector(`li[data-gap="${state.gap}"]`);
       if (row) {
         const top = row.offsetTop - list.offsetTop, bottom = top + row.offsetHeight;
         if (top < list.scrollTop || bottom > list.scrollTop + list.clientHeight) row.scrollIntoView({ block: "center" });
         row.querySelector("button")?.focus({ preventScroll: true });
       }
+    }
+    // ---------- 警告里带 CAD 句柄的对象（重名柜子、异常路径等）：在图上定位 ----------
+    // 句柄 → [{kind, name, floor, pts, line, poly}]；重名柜子只有第一个进了 cabinets，其余在 cabinet_duplicates
+    const handleIndex = new Map();
+    function indexHandle(handle, item) {
+      const key = String(handle || "").trim().toUpperCase();
+      if (!key) return;
+      if (!handleIndex.has(key)) handleIndex.set(key, []);
+      handleIndex.get(key).push({ handle: key, ...item });
+    }
+    data.cabinets.concat(data.cabinet_duplicates || []).forEach(c => indexHandle(c.handle, { kind: "柜子", name: c.name, floor: c.floor, pts: [{ x: c.x, y: c.y }] }));
+    data.shafts.forEach(s => indexHandle(s.handle, { kind: "竖井", name: s.shaft_id, floor: s.floor, pts: [{ x: s.x, y: s.y }] }));
+    data.route_segments.forEach(s => indexHandle(s.handle, { kind: "路径", name: `${s.route_id}${s.section_no ? ":" + s.section_no : ""}`, floor: s.floor, pts: [{ x: s.ax, y: s.ay }, { x: s.bx, y: s.by }], line: true }));
+    data.rooms.forEach(r => indexHandle(r.handle, { kind: "房间", name: r.name, floor: r.floor, pts: r.vertices.map(([x, y]) => ({ x: Number(x), y: Number(y) })), poly: true }));
+    // 文字里“句柄 BF826”“CAD句柄 BF6B3 与 BF6B2”这样的句柄
+    issues.forEach(item => {
+      if (item.gapIndex !== undefined) return;
+      const handles = [];
+      for (const m of item.text.matchAll(/句柄\s*([0-9A-Fa-f]+(?:\s*(?:与|和|、|,|，)\s*[0-9A-Fa-f]+)*)/g))
+        m[1].split(/\s*(?:与|和|、|,|，)\s*/).forEach(h => { if (h && !handles.includes(h.toUpperCase())) handles.push(h.toUpperCase()); });
+      if (!handles.length) return;
+      item.targets = handles.flatMap(h => handleIndex.get(h) || []);
+      item.missing = handles.filter(h => !handleIndex.has(h));
+      if (!item.targets.length) delete item.targets;
+    });
+    function clearTarget() {
+      if (!state.target) return;
+      state.target = null;
+      planUserView = false;
+      document.getElementById("targetInfo").style.display = "none";
+      document.getElementById("detail").style.display = "";
+    }
+    function focusTarget(issueIndex) {
+      const item = issues[issueIndex];
+      if (!item || !item.targets) return;
+      clearGap();
+      state.target = { issue: issueIndex, items: item.targets };
+      const floors = [...new Set(item.targets.map(t => t.floor || ""))];
+      state.floor = floors.length === 1 && data.floors.includes(floors[0]) ? floors[0] : "ALL";
+      planUserView = false;
+      drawer.classList.remove("open");
+      renderFloorTabs();
+      const info = document.getElementById("targetInfo");
+      info.style.display = "block";
+      document.getElementById("detail").style.display = "none";
+      info.innerHTML = `<strong>${esc(item.level)} · 在图上定位</strong>
+        <p>${esc(item.text.trim())}</p>
+        <p>${item.targets.map(t => `红圈：${esc(t.kind)} ${esc(t.name)}（句柄 ${esc(t.handle)}，${esc(t.floor || "未知楼层")}）`).join("<br>")}</p>
+        ${item.missing.length ? `<p style="color:#667">句柄 ${esc(item.missing.join("、"))} 在这次的数据里没有坐标，重新计算后可定位；也可以在 CAD 里用 DCV 总览按句柄查找。</p>` : ""}
+        <button type="button" id="targetBack">返回问题清单</button>
+        <button type="button" id="targetExit">退出定位，返回路径</button>`;
+      document.getElementById("targetBack").onclick = () => openIssues(true);
+      document.getElementById("targetExit").onclick = () => { clearTarget(); renderMap(); };
+      if (state.view === "3d") setView("plan"); else renderMap();
+    }
+    function targetBounds() {
+      const unit = Number(params["CAD每米单位"] || 1000);
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+      state.target.items.forEach(t => t.pts.forEach(p => {
+        x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y);
+      }));
+      // 至少看到周围 15 米，单个柜子也能认出在哪个房间
+      const span = Math.max(x1 - x0, y1 - y0, unit * 15) * 1.6;
+      return { minX: (x0 + x1) / 2 - span / 2, minY: -(y0 + y1) / 2 - span / 2, width: span, height: span, span };
+    }
+    function drawTargets(root, size) {
+      const r = size / 30, w = size / 260;
+      state.target.items.forEach(t => {
+        if (!floorVisible(t.floor)) return;
+        if (t.line || t.poly) {
+          const pts = t.poly ? t.pts.concat([t.pts[0]]) : t.pts;
+          for (let i = 0; i + 1 < pts.length; i++) {
+            addLine(root, pts[i], pts[i + 1], { stroke: "#fff", width: w * 4 });
+            addLine(root, pts[i], pts[i + 1], { stroke: "#c43c32", width: w * 2.2 });
+          }
+        }
+        const c = t.pts.reduce((a, p) => ({ x: a.x + p.x / t.pts.length, y: a.y + p.y / t.pts.length }), { x: 0, y: 0 });
+        const ring = addCircle(root, t.pts.length === 1 ? t.pts[0] : c, { r, fill: "none", stroke: "#c43c32", strokeWidth: w * 1.5 });
+        addTitle(ring, `${t.kind} ${t.name}（句柄 ${t.handle}）`);
+        const label = document.createElementNS(ns, "text");
+        const p = mapPoint(t.pts.length === 1 ? t.pts[0] : c);
+        label.setAttribute("x", p.x + r * 1.1); label.setAttribute("y", p.y - r * 0.8);
+        label.setAttribute("font-size", size / 40); label.setAttribute("fill", "#c43c32");
+        label.setAttribute("stroke", "#fff"); label.setAttribute("stroke-width", size / 400); label.setAttribute("paint-order", "stroke");
+        label.textContent = `${t.name} · ${t.handle}`;
+        root.appendChild(label);
+      });
     }
     const gapSelect = document.getElementById("gapSelect");
     gapSelect.options[0].textContent = data.gaps.length ? `查看 ${data.gaps.length} 处未接上的位置` : "未发现疑似断点";
@@ -792,6 +881,12 @@
           if (item.gapIndex === state.gap) li.classList.add("current");
           const locate = document.createElement("button"); locate.type="button"; locate.textContent="在图上查看";
           locate.onclick=()=>{ issueScrollTop = list.scrollTop; focusGap(item.gapIndex, true); }; li.appendChild(locate);
+        } else if (item.targets) {
+          const index = issues.indexOf(item);
+          li.dataset.issue = index;
+          if (state.target && state.target.issue === index) li.classList.add("current");
+          const locate = document.createElement("button"); locate.type = "button"; locate.textContent = "在图上查看";
+          locate.onclick = () => { issueScrollTop = list.scrollTop; focusTarget(index); }; li.appendChild(locate);
         } else if (item.text.startsWith("提示：已自动连通")) {
           li.lastElementChild.textContent = item.text.replace(/^提示：/, "").replace(/（.*）/, "，已经接好，无需处理。");
         }
@@ -800,7 +895,7 @@
     }
     document.getElementById("issuesBtn").addEventListener("click", () => {
       if (drawer.classList.contains("open")) drawer.classList.remove("open");
-      else openIssues(state.gap >= 0 && gapFromIssues);
+      else openIssues((state.gap >= 0 && gapFromIssues) || !!state.target);
     });
     document.getElementById("drawerClose").addEventListener("click", () => drawer.classList.remove("open"));
     function collectBoundsPoints(cable) {
@@ -864,6 +959,7 @@
       return g ? data.cabinets.filter(c=>c.floor===g.floor).sort((a,b)=>Math.hypot(a.x-g.x,a.y-g.y)-Math.hypot(b.x-g.x,b.y-g.y)).slice(0,2) : [];
     }
     function boundsFor(cable) {
+      if (state.target) return targetBounds();
       if (state.gap >= 0 && state.gapScope === "floor") return floorBounds(state.floor);
       if (state.gap >= 0) {
         const g = data.gaps[state.gap];
@@ -1016,7 +1112,7 @@
         }
       });
       // 本条路径（含柜子接入段和竖井）统一用红色，先垫一层白边，压在其他线上也一眼能看出来
-      const pathEdges = (state.gap >= 0 ? [] : cable.path_edges).filter(edgeVisible);
+      const pathEdges = (state.gap >= 0 || state.target ? [] : cable.path_edges).filter(edgeVisible);
       pathEdges.forEach(edge => {
         const width = edge.kind === "connector" ? pathWidth * 0.72 : pathWidth;
         addLine(overlay, edge.from, edge.to, { stroke: "#fff", width: width * 1.9, opacity: "0.9" });
@@ -1029,7 +1125,7 @@
           opacity: "1"
         });
       });
-      if (state.gap < 0 && isOk(cable)) {
+      if (state.gap < 0 && !state.target && isOk(cable)) {
         addLabel(overlay, cable.path_edges[0]?.from || {}, "起点", { dx: pointR * 1.1, dy: -pointR * 1.4, size: labelSize, fill: "var(--ok)" });
         const last = cable.path_edges[cable.path_edges.length - 1];
         addLabel(overlay, last?.to || {}, "终点", { dx: pointR * 1.1, dy: pointR * 2.2, size: labelSize, fill: "var(--bad)" });
@@ -1053,6 +1149,7 @@
         group.onclick=()=>focusGap(index);
         group.onkeydown=event=>{if(event.key==="Enter"||event.key===" "){event.preventDefault();focusGap(index);}};
       });
+      if (state.target) drawTargets(overlay, size);
       updateGapMarkers();
     }
     function updateGapMarkers() {
@@ -1861,7 +1958,7 @@
     function setView(view) {
       tooltip3d.style.display = "none";
       document.getElementById("gapInfo").style.display = state.gap < 0 ? "none" : "block";
-      document.getElementById("detail").style.display = state.gap < 0 ? "" : "none";
+      document.getElementById("detail").style.display = state.gap < 0 && !state.target ? "" : "none";
       if (view === "3d" && state.view !== "3d" && state.gap >= 0) focusGapCamera();
       state.view = view;
       stage.dataset.view = view === "3d" ? "3d" : "plan";

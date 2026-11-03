@@ -35,7 +35,8 @@ SPEC_HEADERS = ("规格",)
 HEADER_SCAN_ROWS = 10
 
 
-def load_cabinets(data_dir: Path) -> tuple[dict[str, Cabinet], list[str]]:
+def load_cabinets(data_dir: Path, duplicates: list[Cabinet] | None = None) -> tuple[dict[str, Cabinet], list[str]]:
+    """duplicates 收集因重名被丢弃的柜子，可视化里点警告能定位到它们。"""
     cabinets: dict[str, Cabinet] = {}
     warnings: list[str] = []
     for row in read_csv_dicts(data_csv_path(data_dir, "柜子坐标.csv", "cabinets.csv")):
@@ -60,6 +61,8 @@ def load_cabinets(data_dir: Path) -> tuple[dict[str, Cabinet], list[str]]:
             first = cabinets[name]
             where = f"（CAD句柄 {first.handle} 与 {cabinet.handle}）" if first.handle and cabinet.handle else ""
             warnings.append(f"柜子名称重复：{name}{where}，已采用第一条坐标")
+            if duplicates is not None:
+                duplicates.append(cabinet)
             continue
         cabinets[name] = cabinet
     return cabinets, warnings

@@ -79,7 +79,8 @@ def run(
     _, param_warnings = load_params_with_warnings(data_dir)
     wb, ws, headers, rows, required_names = load_workbook_rows(workbook)
     try:
-        cabinets, cabinet_warnings = load_cabinets(data_dir)
+        cabinet_duplicates: list = []
+        cabinets, cabinet_warnings = load_cabinets(data_dir, cabinet_duplicates)
         cad_cabinet_names = sorted(cabinets)
         aliases, alias_warnings = load_aliases(data_dir)
         alias_warnings += apply_aliases(cabinets, aliases)
@@ -125,7 +126,8 @@ def run(
                 notes.append(f"注意：{name} 正被占用（多半在 Excel 里开着），本次没有更新它；结果工作簿里有同样的表")
         advance(88, "生成路径可视化与明细")
         visual_data = build_visualization_data(
-            workbook, output_path, params, graph, segments, cabinets, shafts, rooms, visual_cables, issues, floor_offsets
+            workbook, output_path, params, graph, segments, cabinets, shafts, rooms, visual_cables, issues, floor_offsets,
+            cabinet_duplicates,
         )
         json_path, html_path = write_visualization_files(outputs_dir, visual_data)
         advance(100, "统计完成")
