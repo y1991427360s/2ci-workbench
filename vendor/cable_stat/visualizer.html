@@ -17,6 +17,7 @@
       --bad: #c43f4a;
       --accent: #0b6f97;
       --shaft: #9a4fb0;
+      --path: #e11d2e;
       --room: #3f7d8c;
     }
     * { box-sizing: border-box; }
@@ -182,7 +183,7 @@
       font-size: 12px;
     }
     .swatch { width: 22px; height: 3px; display: inline-block; vertical-align: middle; margin-right: 5px; background: var(--route); }
-    .swatch.path { background: var(--ok); }
+    .swatch.path { background: var(--path); height: 4px; }
     .swatch.connector { background: var(--warn); }
     .swatch.shaft { background: var(--shaft); }
     .swatch.room { height: 10px; border: 1px solid var(--room); background: rgba(63,125,140,0.14); }
@@ -360,7 +361,6 @@
         <div class="legend">
           <span><i class="swatch"></i>固定路径</span>
           <span><i class="swatch path"></i>本条路径</span>
-          <span><i class="swatch connector"></i>柜子接入</span>
           <span><i class="swatch shaft"></i>竖井</span>
           <span><i class="swatch room"></i>房间范围</span>
           <span id="gapLegend" hidden style="color:#c43c32">◎ 编号红圈：线路可能没接上（点击查看）</span>
@@ -958,7 +958,7 @@
       const height = state.gap >= 0 ? box.height : Math.max(box.height, 1000);
       const size = Math.max(width, height);
       const networkWidth = state.gap >= 0 ? size / 900 : Math.max(size / 1200, 18);
-      const pathWidth = Math.min(Math.max(size / 520, 28), 140);
+      const pathWidth = Math.min(Math.max(size / 400, 36), 180);
       const pointR = Math.min(Math.max(size / 500, 22), 120);
       const labelSize = Math.min(Math.max(size / 220, 18), 180);
       svg.setAttribute("viewBox", keepBox || `${box.minX} ${box.minY} ${width} ${height}`);
@@ -1015,14 +1015,18 @@
           if(label) {label.dataset.contextX=cab.x;label.dataset.contextY=cab.y;}
         }
       });
-      (state.gap >= 0 ? [] : cable.path_edges).forEach(edge => {
-        if (!edgeVisible(edge)) return;
-        const stroke = edge.kind === "connector" ? "var(--warn)" : edge.kind === "shaft" ? "var(--shaft)" : "var(--ok)";
+      // 本条路径（含柜子接入段和竖井）统一用红色，先垫一层白边，压在其他线上也一眼能看出来
+      const pathEdges = (state.gap >= 0 ? [] : cable.path_edges).filter(edgeVisible);
+      pathEdges.forEach(edge => {
+        const width = edge.kind === "connector" ? pathWidth * 0.72 : pathWidth;
+        addLine(overlay, edge.from, edge.to, { stroke: "#fff", width: width * 1.9, opacity: "0.9" });
+      });
+      pathEdges.forEach(edge => {
         addLine(overlay, edge.from, edge.to, {
-          stroke,
+          stroke: "var(--path)",
           width: edge.kind === "connector" ? pathWidth * 0.72 : pathWidth,
           dash: edge.kind === "shaft" ? `${pathWidth * 2} ${pathWidth * 1.4}` : "",
-          opacity: "0.95"
+          opacity: "1"
         });
       });
       if (state.gap < 0 && isOk(cable)) {
@@ -1480,9 +1484,8 @@
         const ty = wy(edge.to.floor, edge.to.y);
         const tz = zOf(edge.to.floor);
         addLine3d(fx, fy, fz, tx, ty, tz, { stroke: "rgba(255,255,255,0.9)", width: 6.5, bias: -eps * 2 });
-        const stroke = edge.kind === "connector" ? "#c7791b" : edge.kind === "shaft" ? "#9a4fb0" : "#147d64";
         addLine3d(fx, fy, fz, tx, ty, tz, {
-          stroke, width: 3.2, dash: edge.kind === "shaft" ? [8, 6] : null, bias: -eps * 3
+          stroke: "#e11d2e", width: 3.6, dash: edge.kind === "shaft" ? [8, 6] : null, bias: -eps * 3
         });
       });
       if (state.gap < 0 && isOk(cable) && cable.path_edges.length) {
