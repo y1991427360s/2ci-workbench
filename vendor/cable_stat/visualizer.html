@@ -811,27 +811,24 @@
       const span = Math.max(x1 - x0, y1 - y0, unit * 15) * 1.6;
       return { minX: (x0 + x1) / 2 - span / 2, minY: -(y0 + y1) / 2 - span / 2, width: span, height: span, span };
     }
-    function drawTargets(root, size) {
-      const r = size / 30, w = size / 260;
+    // 定位标记：线按像素宽（不随缩放变粗），红圈和文字由 layoutZoomLabels 按像素定大小
+    function drawTargets(root) {
       state.target.items.forEach(t => {
         if (!floorVisible(t.floor)) return;
         if (t.line || t.poly) {
           const pts = t.poly ? t.pts.concat([t.pts[0]]) : t.pts;
           for (let i = 0; i + 1 < pts.length; i++) {
-            addLine(root, pts[i], pts[i + 1], { stroke: "#fff", width: w * 4 });
-            addLine(root, pts[i], pts[i + 1], { stroke: "#c43c32", width: w * 2.2 });
+            [["#fff", 7], ["#c43c32", 4]].forEach(([stroke, px]) => {
+              const line = addLine(root, pts[i], pts[i + 1], { stroke, width: px });
+              line.setAttribute("vector-effect", "non-scaling-stroke");
+            });
           }
         }
-        const c = t.pts.reduce((a, p) => ({ x: a.x + p.x / t.pts.length, y: a.y + p.y / t.pts.length }), { x: 0, y: 0 });
-        const ring = addCircle(root, t.pts.length === 1 ? t.pts[0] : c, { r, fill: "none", stroke: "#c43c32", strokeWidth: w * 1.5 });
+        const c = t.pts.length === 1 ? t.pts[0] : t.pts.reduce((a, p) => ({ x: a.x + p.x / t.pts.length, y: a.y + p.y / t.pts.length }), { x: 0, y: 0 });
+        const ring = addCircle(zoomLayer, c, { r: 1, fill: "none", stroke: "#c43c32" });
+        ring.dataset.ring = 16;
         addTitle(ring, `${t.kind} ${t.name}（句柄 ${t.handle}）`);
-        const label = document.createElementNS(ns, "text");
-        const p = mapPoint(t.pts.length === 1 ? t.pts[0] : c);
-        label.setAttribute("x", p.x + r * 1.1); label.setAttribute("y", p.y - r * 0.8);
-        label.setAttribute("font-size", size / 40); label.setAttribute("fill", "#c43c32");
-        label.setAttribute("stroke", "#fff"); label.setAttribute("stroke-width", size / 400); label.setAttribute("paint-order", "stroke");
-        label.textContent = `${t.name} · ${t.handle}`;
-        root.appendChild(label);
+        addZoomLabel(c, `${t.name} · ${t.handle}`, { px: 13, dx: 20, dy: -12, fill: "#c43c32", weight: 700, prio: 0, force: true });
       });
     }
     const gapSelect = document.getElementById("gapSelect");
@@ -1029,6 +1026,54 @@
       root.appendChild(label);
       return label;
     }
+    // ---------- 平面图文字：按屏幕像素定字号，缩放时重新排，放大后才显示得下的名称（柜名、房间名）自动出现 ----------
+    // opts：px 字号（像素）、dx/dy 像素偏移、fill、weight、anchor、prio（小的先排）、optional（和已排文字重叠就不显示）
+    let zoomLayer = null;
+    function addZoomLabel(point, text, opts) {
+      if ((!state.showLabels && !opts.force) || !text || !zoomLayer) return null;
+      const label = document.createElementNS(ns, "text");
+      label.textContent = text;
+      label.setAttribute("fill", opts.fill || "#17211d");
+      label.setAttribute("stroke", "#fff");
+      label.setAttribute("paint-order", "stroke");
+      if (opts.weight) label.setAttribute("font-weight", opts.weight);
+      if (opts.anchor) label.setAttribute("text-anchor", opts.anchor);
+      label.style.pointerEvents = "none";
+      label.zoom = { x: Number(point.x), y: -Number(point.y), px: opts.px || 12, dx: opts.dx || 0, dy: opts.dy || 0,
+        prio: opts.prio ?? 5, optional: !!opts.optional, anchor: opts.anchor || "start", text };
+      zoomLayer.appendChild(label);
+      return label;
+    }
+    // 估算文字宽度（像素）：中文按 1 个字宽，其他按 0.6 个
+    function zoomTextWidth(text, px) {
+      let w = 0;
+      for (const ch of text) w += ch.charCodeAt(0) > 127 ? 1 : 0.6;
+      return w * px;
+    }
+    function layoutZoomLabels(vb, k) {
+      if (!zoomLayer) return;
+      const labels = [...zoomLayer.children].filter(el => el.zoom).sort((a, b) => a.zoom.prio - b.zoom.prio);
+      const placed = [];
+      const pad = 2 * k;
+      labels.forEach(el => {
+        const z = el.zoom, w = zoomTextWidth(z.text, z.px) * k, h = z.px * 1.25 * k;
+        const x = z.x + z.dx * k, y = z.y + z.dy * k;
+        const left = z.anchor === "middle" ? x - w / 2 : x, top = y - h * 0.8;
+        const box = [left - pad, top - pad, left + w + pad, top + h + pad];
+        const inView = box[2] > vb[0] && box[0] < vb[0] + vb[2] && box[3] > vb[1] && box[1] < vb[1] + vb[3];
+        const hit = placed.some(p => box[0] < p[2] && p[0] < box[2] && box[1] < p[3] && p[1] < box[3]);
+        if (!inView || (z.optional && hit)) { el.style.display = "none"; return; }
+        el.style.display = "";
+        el.setAttribute("x", x); el.setAttribute("y", y);
+        el.setAttribute("font-size", z.px * k); el.setAttribute("stroke-width", z.px * 0.25 * k);
+        placed.push(box);
+      });
+      // 定位红圈按像素定大小
+      zoomLayer.querySelectorAll("circle[data-ring]").forEach(c => {
+        c.setAttribute("r", Number(c.dataset.ring) * k);
+        c.setAttribute("stroke-width", 3 * k);
+      });
+    }
     function addRoom(root, room, lineWidth, labelSize) {
       if (!room.vertices.length) return;
       const polygon = document.createElementNS(ns, "polygon");
@@ -1039,7 +1084,7 @@
       polygon.setAttribute("stroke-dasharray", `${lineWidth * 4} ${lineWidth * 2}`);
       root.appendChild(polygon);
       const center = room.vertices.reduce((acc, point) => ({ x: acc.x + Number(point[0]) / room.vertices.length, y: acc.y + Number(point[1]) / room.vertices.length }), { x: 0, y: 0 });
-      addLabel(root, center, room.name, { dx: 0, dy: 0, size: labelSize * 0.75, fill: "var(--room)" });
+      addZoomLabel(center, room.name, { px: 12, fill: "var(--room)", anchor: "middle", prio: 2, optional: true });
     }
     function renderPlan() {
       const cable = data.cables[state.selected] || data.cables[0] || { path_edges: [] };
@@ -1064,6 +1109,8 @@
       const overlay = document.createElementNS(ns, "g");
       svg.appendChild(base);
       svg.appendChild(overlay);
+      zoomLayer = document.createElementNS(ns, "g");
+      svg.appendChild(zoomLayer);
       data.rooms.forEach(room => {
         if (floorVisible(room.floor)) addRoom(base, room, networkWidth * 0.9, labelSize);
       });
@@ -1096,7 +1143,7 @@
         if (!floorVisible(shaft.floor)) return;
         const circle = addCircle(base, shaft, { r: pointR * 0.72, fill: "var(--shaft)", stroke: "#fff" });
         addTitle(circle, `竖井 ${shaft.shaft_id}（${shaft.floor}，高 ${shaft.height_m} m）`);
-        addLabel(base, shaft, shaft.shaft_id, { dx: pointR * 1.2, dy: -pointR * 0.7, size: labelSize * 0.75, fill: "var(--shaft)" });
+        addZoomLabel(shaft, shaft.shaft_id, { px: 11, dx: 7, dy: -5, fill: "var(--shaft)", prio: 3, optional: true });
       });
       data.cabinets.forEach(cab => {
         if (!floorVisible(cab.floor)) return;
@@ -1105,11 +1152,9 @@
         circle.style.cursor = "pointer";
         addTitle(circle, `${cab.name}（${cab.floor}）— 点击筛选这个柜子的电缆`);
         circle.addEventListener("click", () => filterByCabinet(cab.name));
-        if (selected) addLabel(overlay, cab, cab.name, { dx: pointR * 1.5, dy: pointR * 0.4, size: labelSize * 0.8, fill: "var(--accent)" });
-        else if (nearby.has(cab)) {
-          const label=addLabel(overlay,cab,cab.name,{dx:pointR,dy:-pointR,size:labelSize*0.8});
-          if(label) {label.dataset.contextX=cab.x;label.dataset.contextY=cab.y;}
-        }
+        // 本条电缆的起终点柜、检查点附近的柜子一定显示；其余柜名放大到排得下时才显示
+        if (selected) addZoomLabel(cab, cab.name, { px: 13, dx: 9, dy: 4, fill: "var(--accent)", weight: 700, prio: 1 });
+        else addZoomLabel(cab, cab.name, { px: 11, dx: 6, dy: -4, prio: nearby.has(cab) ? 1 : 4, optional: !nearby.has(cab) });
       });
       // 本条路径（含柜子接入段和竖井）统一用红色，先垫一层白边，压在其他线上也一眼能看出来
       const pathEdges = (state.gap >= 0 || state.target ? [] : cable.path_edges).filter(edgeVisible);
@@ -1126,9 +1171,9 @@
         });
       });
       if (state.gap < 0 && !state.target && isOk(cable)) {
-        addLabel(overlay, cable.path_edges[0]?.from || {}, "起点", { dx: pointR * 1.1, dy: -pointR * 1.4, size: labelSize, fill: "var(--ok)" });
+        addZoomLabel(cable.path_edges[0]?.from || {}, "起点", { px: 14, dx: 8, dy: -10, fill: "var(--ok)", weight: 700, prio: 0 });
         const last = cable.path_edges[cable.path_edges.length - 1];
-        addLabel(overlay, last?.to || {}, "终点", { dx: pointR * 1.1, dy: pointR * 2.2, size: labelSize, fill: "var(--bad)" });
+        addZoomLabel(last?.to || {}, "终点", { px: 14, dx: 8, dy: 20, fill: "var(--bad)", weight: 700, prio: 0 });
       }
       (state.showGaps ? data.gaps : []).forEach((gap,index) => {
         if (!floorVisible(gap.floor)) return;
@@ -1149,13 +1194,14 @@
         group.onclick=()=>focusGap(index);
         group.onkeydown=event=>{if(event.key==="Enter"||event.key===" "){event.preventDefault();focusGap(index);}};
       });
-      if (state.target) drawTargets(overlay, size);
+      if (state.target) drawTargets(overlay);
       updateGapMarkers();
     }
     function updateGapMarkers() {
       const vb = planViewBox();
       if (!vb) return;
       const k = planUnitsPerPixel(vb);
+      layoutZoomLabels(vb, k);
       const placed = [];
       svg.querySelectorAll("[data-context-x]").forEach(label=>{
         const x=Number(label.dataset.contextX)+7*k;
