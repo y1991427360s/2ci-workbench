@@ -1,4 +1,4 @@
-"""长度规则：判断路径是否拐弯，按“+余量 / (+余量)×倍率 / 强制规则 / 跨房间修正”算出每条电缆的自动统计值。"""
+"""长度规则：判断路径是否拐弯，按“+余量 / (+余量)×倍率 / 强制规则 / 跨房间修正 / 柜子长度调整”算出每条电缆的自动统计值。"""
 
 from __future__ import annotations
 
@@ -197,9 +197,12 @@ def calculate_rows(
             end_room = "、".join(room.name for room in room_info["end_rooms"])
             crosses_room = bool(room_info["crosses_room"])
             room_extra = params.get("跨房间修正", 3.0) if crosses_room else 0.0
+            # 柜子长度调整（CAD 里给柜子设的加减米数）和跨房间修正一样，在倍率之后直接加，不参与放大
+            adjusts = [cab for cab in (cabinets.get(start), cabinets.get(end)) if cab is not None and cab.adjust]
+            added = room_extra + sum(cab.adjust for cab in adjusts)
             override = rule_overrides.get((start, end)) or rule_overrides.get((end, start))
             if override is not None:
-                auto_value = round_half_up(dist_m + float(override["extra"]) + room_extra, 1)
+                auto_value = round_half_up(dist_m + float(override["extra"]) + added, 1)
                 rule = f"强制规则 {override['extra']:+g}"
                 rule_kind = RULE_OVERRIDE
                 if override["note"]:
@@ -207,16 +210,20 @@ def calculate_rows(
             elif bent:
                 multiplier = params["拐弯倍率"]
                 base_extra = params["不拐弯修正"]
-                auto_value = round_half_up((dist_m + base_extra) * multiplier + room_extra, 1)
+                auto_value = round_half_up((dist_m + base_extra) * multiplier + added, 1)
                 rule = f"路径拐弯/跨楼层（+{base_extra:g}）×{multiplier:g}"
                 rule_kind = RULE_BENT
             else:
-                auto_value = round_half_up(dist_m + params["不拐弯修正"] + room_extra, 1)
+                auto_value = round_half_up(dist_m + params["不拐弯修正"] + added, 1)
                 rule = f"路径不拐弯 +{params['不拐弯修正']:g}"
                 rule_kind = RULE_STRAIGHT
             extra = round(auto_value - dist_m, 3)
             if crosses_room:
                 rule += f"；跨房间 +{room_extra:g}"
+            for cab in adjusts:
+                rule += f"；柜子调整 {cab.name} {cab.adjust:+g}"
+                if cab.adjust_note:
+                    rule += f"（{cab.adjust_note}）"
             base_length = round(dist_m, 3)
             manual = row["手工长度"]
             if isinstance(manual, (int, float)) and not isinstance(manual, bool):

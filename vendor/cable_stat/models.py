@@ -30,6 +30,9 @@ class Cabinet:
     layer: str
     object_type: str
     handle: str
+    # CAD 里给这台柜子设的长度调整（米）：以它为起点或终点的电缆都加上，负数为减
+    adjust: float = 0.0
+    adjust_note: str = ""
 
 
 @dataclass

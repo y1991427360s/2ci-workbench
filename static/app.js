@@ -434,7 +434,7 @@ function outputs(c) {
 }
 
 function guide(c) {
-    c.innerHTML = '<div class="hero"><p class="eyebrow">CAD DATA / 数据导出向导</p><h2>从图纸提取路径，在网页完成计算</h2><p>使用原版完整 CAD 导出向导，一键从 CAD 提取设备、路径与竖井数据，上传至当前工程即可完成自动化设计计算。</p></div><div class="panel"><div class="actions"><a class="button primary" href="/static/cad_cable_wizard.lsp" download>↓ 下载 CAD 导出向导 (AutoLISP)</a></div><div class="steps"><p>在 AutoCAD / ZWCAD 中输入 APPLOAD 命令，加载下载的 LISP 向导程序。</p><p>在命令行输入 DCW 打开向导，按六步依次建楼层、定义房间、标柜子、画通道、标竖井，随时输入 DCV 查看已定义内容。</p><p>在向导第 6 步检查后，自动将四个 CSV 导出到桌面，无需选择文件夹。</p><p>进入网页版「电缆统计」模块，上传原始工程清册，将桌面导出的四个 CSV 拖入导入区域并保存。</p><p>核对计算参数与柜名映射，点击计算并打开二维 / 三维路径可视化复核。</p></div></div>';
+    c.innerHTML = '<div class="hero"><p class="eyebrow">CAD DATA / 数据导出向导</p><h2>从图纸提取路径，在网页完成计算</h2><p>使用原版完整 CAD 导出向导，一键从 CAD 提取设备、路径与竖井数据，上传至当前工程即可完成自动化设计计算。</p></div><div class="panel"><div class="actions"><a class="button primary" href="/static/cad_cable_wizard.lsp" download>↓ 下载 CAD 导出向导 (AutoLISP)</a></div><div class="steps"><p>在 AutoCAD / ZWCAD 中输入 APPLOAD 命令，加载下载的 LISP 向导程序。</p><p>在命令行输入 DCW 打开向导，按六步依次建楼层、定义房间、标柜子、画通道、标竖井，随时输入 DCV 查看已定义内容。</p><p>个别柜子要在计算结果上额外加减长度（如外置端子箱多绕 4 米），输入 DCA 选柜名设置，或在“电缆定义总览”面板里右键柜子；网页计算时，以它为起点或终点的电缆自动加上，规则列会注明。</p><p>在向导第 6 步检查后，自动将四个 CSV 导出到桌面，无需选择文件夹。</p><p>进入网页版「电缆统计」模块，上传原始工程清册，将桌面导出的四个 CSV 拖入导入区域并保存。</p><p>核对计算参数与柜名映射，点击计算并打开二维 / 三维路径可视化复核。</p></div></div>';
 }
 
 async function navigate(next) {

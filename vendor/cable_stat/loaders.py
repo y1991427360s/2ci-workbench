@@ -53,6 +53,8 @@ def load_cabinets(data_dir: Path) -> tuple[dict[str, Cabinet], list[str]]:
             layer=normalize_text(row.get("图层")),
             object_type=normalize_text(row.get("对象类型")),
             handle=normalize_text(row.get("句柄")),
+            adjust=parse_float(row.get("长度调整")) or 0.0,
+            adjust_note=normalize_text(row.get("调整说明")),
         )
         if name in cabinets:
             first = cabinets[name]

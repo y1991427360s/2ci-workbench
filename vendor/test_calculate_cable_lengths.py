@@ -180,6 +180,47 @@ def test_room_extra_stacks_after_override():
     assert "强制规则 +2" in row["规则"] and "跨房间 +3" in row["规则"]
 
 
+def test_cabinet_adjust_added_after_multiplier():
+    # 拐弯路径：(8 + 7) × 1.2 = 18，再加起点柜 +4、终点柜 -1.5
+    segments = [make_segment(1, 0, 0, 4000, 0), make_segment(2, 4000, 0, 4000, 4000)]
+    cabinets = {"柜A": make_cabinet("柜A", 0, 0), "柜B": make_cabinet("柜B", 4000, 4000)}
+    cabinets["柜A"].adjust, cabinets["柜A"].adjust_note = 4.0, "外置端子箱"
+    cabinets["柜B"].adjust = -1.5
+    row, visual = calculate_pair_with_rooms(segments, cabinets, [])
+    assert row["自动统计"] == 20.5 and row["修正量"] == 12.5, row
+    assert "柜子调整 柜A +4（外置端子箱）" in row["规则"] and "柜子调整 柜B -1.5" in row["规则"], row
+    assert visual["auto_length"] == 20.5
+
+
+def test_cabinet_adjust_stacks_with_override_and_room():
+    segments = [make_segment(1, 0, 0, 10000, 0)]
+    cabinets = {"柜A": make_cabinet("柜A", 1000, 0), "柜B": make_cabinet("柜B", 9000, 0)}
+    cabinets["柜B"].adjust = 4.0
+    rooms = [make_room("房间A", [(-500, -1000), (4000, -1000), (4000, 1000), (-500, 1000)])]
+    overrides = {("柜A", "柜B"): {"extra": 2.0, "note": ""}}
+    row, _ = calculate_pair_with_rooms(segments, cabinets, rooms, overrides=overrides)
+    assert row["自动统计"] == 17.0, row
+    assert "跨房间 +3" in row["规则"] and "柜子调整 柜B +4" in row["规则"], row
+
+
+def test_load_cabinets_reads_adjust_columns():
+    import tempfile
+
+    from cable_stat.loaders import load_cabinets
+
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        (data_dir / "柜子坐标.csv").write_text(
+            "柜子名称,楼层,房间,X,Y,图层,对象类型,句柄,长度调整,调整说明\n"
+            "柜A,1F,,0,0,CABLE_CABINET_1F,TEXT,1A,4.000,外置端子箱\n"
+            "柜B,1F,,1,1,CABLE_CABINET_1F,TEXT,1B,,\n",
+            encoding="utf-8-sig",
+        )
+        cabinets, _ = load_cabinets(data_dir)
+    assert cabinets["柜A"].adjust == 4.0 and cabinets["柜A"].adjust_note == "外置端子箱"
+    assert cabinets["柜B"].adjust == 0.0 and cabinets["柜B"].adjust_note == ""
+
+
 def test_boundary_and_concave_polygon_geometry():
     concave = make_room("凹房间", [(0, 0), (10, 0), (10, 10), (6, 10), (6, 4), (4, 4), (4, 10), (0, 10)])
     assert point_in_polygon((0, 5), concave.vertices)

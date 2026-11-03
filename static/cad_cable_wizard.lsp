@@ -12,6 +12,7 @@
 ;;; 其他命令:
 ;;;   DCW                      打开向导菜单（DDFD_CABLE_WIZARD 的短命令）
 ;;;   DCV                      定义总览：每层的房间、房间里的柜子、通道、竖井配对和问题清单（DDFD_CABLE_LIST 同）
+;;;   DCA                      柜子长度调整：给某台柜子的电缆统一加/减几米，导出到 柜子坐标.csv 的“长度调整”列（DDFD_CABLE_ADJUST 同）
 ;;;   DDFD_EXPORT_CABLE_ROUTE  仅导出4个CSV（与 cad_export_cable_route.lsp 相同，可手动选目录）
 ;;;   DDFD_ROOM_CHECK          检查房间：列出将导出的房间，定位房间图层上未命名/无效的多段线
 ;;;   DDFD_CLEAN_ROOM_LAYERS   把房间图层上未命名的多段线移到 0 层（先确认，可 U 撤销）
@@ -30,7 +31,7 @@
 (vl-load-com)
 
 ;; 改动本文件时同步更新版本号，加载时会打印，便于确认 CAD 里用的是哪一版
-(setq *ddfd-cable-version* "2026-11-02-live")
+(setq *ddfd-cable-version* "2026-11-03-adjust")
 ;; 网页版工作台地址，第6步导出后可直接打开
 (setq *ddfd-web-url* "https://2ci.sen666.cn/")
 
@@ -330,6 +331,15 @@
   (entupd ename)
 )
 
+;; 柜子长度调整：存在柜名对象的 XData 里（DDFD_CABLE_ADJ：1040 米数，1000 说明）。
+;; 网页算长度时，以这台柜子为起点或终点的每根电缆都加上这个值，负数为减。返回 (米数 说明)，没设过是 (0.0 "")
+(defun ddfd-cab-adjust (ename / xd item v note)
+  (setq xd (assoc -3 (entget ename (list "DDFD_CABLE_ADJ"))))
+  (if (and xd (setq item (cadr xd)))
+    (setq v (cdr (assoc 1040 (cdr item)))
+          note (cdr (assoc 1000 (cdr item)))))
+  (list (if v v 0.0) (if note note "")))
+
 (defun ddfd-room-has-arc (ename / ent typ cur vd item found)
   (setq ent (entget ename))
   (setq typ (cdr (assoc 0 ent)))
@@ -510,7 +520,7 @@
 
 ;; —— 柜子/竖井导出 ——
 
-(defun ddfd-export-point-row (fh pattern en / ent layer floor handle kind pt nm)
+(defun ddfd-export-point-row (fh pattern en / ent layer floor handle kind pt nm adj)
   (setq ent (entget en)
         layer (cdr (assoc 8 ent))
         floor (ddfd-layer-floor layer)
@@ -529,8 +539,11 @@
      (if (= kind "SHAFT")
        (ddfd-write-csv-row fh
          (list nm floor (rtos (car pt) 2 6) (rtos (cadr pt) 2 6) "" layer (cdr (assoc 0 ent)) handle))
-       (ddfd-write-csv-row fh
-         (list nm floor "" (rtos (car pt) 2 6) (rtos (cadr pt) 2 6) layer (cdr (assoc 0 ent)) handle))))))
+       (progn
+         (setq adj (ddfd-cab-adjust en))
+         (ddfd-write-csv-row fh
+           (list nm floor "" (rtos (car pt) 2 6) (rtos (cadr pt) 2 6) layer (cdr (assoc 0 ent)) handle
+                 (if (= (car adj) 0.0) "" (rtos (car adj) 2 3)) (cadr adj))))))))
 
 ;; 逐个图元捕获错误：先保证文件被关闭（否则 .pending 被锁、清理不掉），
 ;; 再报出出错图元的句柄；有任何图元失败就返回 nil，整次导出放弃、保留原数据
@@ -785,7 +798,7 @@
 (defun ddfd-export-stage (outdir rooms)
   (and (ddfd-export-rooms (strcat outdir "房间范围.csv.pending") rooms)
        (ddfd-export-point-layer "CABLE_CABINET*" (strcat outdir "柜子坐标.csv.pending")
-         (list "柜子名称" "楼层" "房间" "X" "Y" "图层" "对象类型" "句柄"))
+         (list "柜子名称" "楼层" "房间" "X" "Y" "图层" "对象类型" "句柄" "长度调整" "调整说明"))
        (ddfd-export-routes (strcat outdir "路径线段.csv.pending"))
        (ddfd-export-point-layer "CABLE_SHAFT*" (strcat outdir "竖井.csv.pending")
          (list "竖井编号" "楼层" "X" "Y" "高度" "图层" "对象类型" "句柄"))))
@@ -1372,7 +1385,7 @@
 ;; 读图纸里已定义的全部内容，算好归属和问题，存进下面这些全局表，命令行和面板都从这里取：
 ;;   *ddfd-ov-floors*  楼层串的表，楼层未知的对象归到 ""，排在最后
 ;;   *ddfd-ov-rooms*   ((楼层 名称 句柄 顶点表 (x0 y0 x1 y1)) ...)
-;;   *ddfd-ov-cabs*    ((柜名 楼层 句柄 x y 房间句柄或nil 房间名或"") ...)
+;;   *ddfd-ov-cabs*    ((柜名 楼层 句柄 x y 房间句柄或nil 房间名或"" 长度调整米数 调整说明) ...)
 ;;   *ddfd-ov-shafts*  ((配对名 全名 楼层 句柄 x y) ...)
 ;;   *ddfd-ov-routes*  ((楼层 句柄 段数 顶点表) ...)
 ;;   *ddfd-ov-issues*  ((级别 步骤号 类别 句柄 文字) ...)，级别 err 错误、warn 提醒、info 说明
@@ -1447,9 +1460,10 @@
        (ddfd-ov-issue "warn" 3 "房间重叠" handle
          (strcat "柜子 " nm " 同时在多个房间内：" (ddfd-join (mapcar 'cadr hits) "、"))))
      (setq *ddfd-ov-cabs*
-       (cons (list nm floor handle (car pt) (cadr pt)
-                   (if hits (caddr (car hits)))
-                   (if hits (cadr (car hits)) ""))
+       (cons (append (list nm floor handle (car pt) (cadr pt)
+                           (if hits (caddr (car hits)))
+                           (if hits (cadr (car hits)) ""))
+                     (ddfd-cab-adjust en))
              *ddfd-ov-cabs*)))))
 
 (defun ddfd-ov-add-shaft (en / ent layer floor handle pt nm)
@@ -1679,7 +1693,11 @@
   (setq outside (ddfd-ov-floor-items cabs 5 nil))
   (if outside
     (princ (strcat "\n  " (if rooms "不在任何房间" "柜子") "（" (itoa (length outside)) " 台）："
-                   (ddfd-join (ddfd-ov-sort-names (mapcar 'car outside)) "、")))))
+                   (ddfd-join (ddfd-ov-sort-names (mapcar 'car outside)) "、"))))
+  (foreach r cabs
+    (if (/= (nth 7 r) 0.0)
+      (princ (strcat "\n  长度调整：" (car r) " " (ddfd-cab-adjust-text (nth 7 r))
+                     (if (/= (nth 8 r) "") (strcat "（" (nth 8 r) "）") ""))))))
 
 ;; 竖井配对：每个竖井标到了哪些楼层
 (defun ddfd-ov-print-shafts (/ b fl line hit real-floors)
@@ -1788,7 +1806,8 @@
   (foreach r *ddfd-ov-cabs*
     (ddfd-ov-write-row fh
       (list "CAB" (cadr r) (car r) (caddr r) (ddfd-ov-num (nth 3 r)) (ddfd-ov-num (nth 4 r))
-            (cond ((nth 5 r)) (T "")) (nth 6 r))))
+            (cond ((nth 5 r)) (T "")) (nth 6 r)
+            (if (= (nth 7 r) 0.0) "" (ddfd-ov-num (nth 7 r))) (nth 8 r))))
   (foreach r *ddfd-ov-shafts*
     (ddfd-ov-write-row fh
       (list "SHAFT" (caddr r) (car r) (cadr r) (cadddr r) (ddfd-ov-num (nth 4 r)) (ddfd-ov-num (nth 5 r)))))
@@ -1802,7 +1821,7 @@
 ;; %TEMP%\DDFD-Cable\overview.txt：先写 .tmp 再改名，面板不会读到半个文件。第一行 DDFDOVERVIEW 1，之后按行首分类：
 ;;   ID / TIME / DWG / VERSION / CURFLOOR（向导正在处理的楼层，面板跟着切换）
 ;;   STEP 步骤号 名称 状态 说明；FLOOR 楼层（空串是楼层未知）
-;;   ROOM 楼层 名称 句柄 柜子数 顶点；CAB 楼层 柜名 句柄 x y 房间句柄 房间名
+;;   ROOM 楼层 名称 句柄 柜子数 顶点；CAB 楼层 柜名 句柄 x y 房间句柄 房间名 长度调整(米，没有为空) 调整说明
 ;;   SHAFT 楼层 配对名 全名 句柄 x y；ROUTE 楼层 句柄 段数 顶点
 ;;   ISSUE 级别 步骤号 类别 句柄 文字；EXPORT ok或fail 目录 时间
 (defun ddfd-ov-write-file (/ dir tmp out fh result)
@@ -2055,7 +2074,67 @@
 (defun c:DDFD_CABLE_SHAFTS () (ddfd-wiz-run 5 nil))
 (defun c:DDFD_CABLE_EXPORT_RUN () (ddfd-wiz-run 6 nil))
 
+;; —— 柜子长度调整 ——
+;; 在现有计算规则之外，给某台柜子的电缆统一加或减一段长度（如外置端子箱要多绕 4 米）。
+;; 值写进柜名对象的 XData，柜名文字移动、改字都会带着；可以 U 撤销
+
+(defun ddfd-cab-entity-p (en / ed)
+  (and en (setq ed (entget en))
+       (wcmatch (strcase (cdr (assoc 8 ed))) "CABLE_CABINET*")))
+
+;; 3 位小数去掉末尾的 0：4.0 → "4"，-1.25 → "-1.25"
+(defun ddfd-num-short (v / s)
+  (setq s (rtos v 2 3))
+  (if (vl-string-search "." s)
+    (setq s (vl-string-right-trim "." (vl-string-right-trim "0" s))))
+  s)
+
+(defun ddfd-cab-adjust-text (v)
+  (strcat (if (> v 0.0) "+" "") (ddfd-num-short v) " 米"))
+
+;; 米数为 0 时删掉这项 XData（entmod 只给应用名就是删除）
+(defun ddfd-cab-set-adjust (en v note / app)
+  (regapp "DDFD_CABLE_ADJ")
+  (setq app (if (= v 0.0)
+              (list "DDFD_CABLE_ADJ")
+              (append (list "DDFD_CABLE_ADJ" (cons 1040 v))
+                      (if (/= note "") (list (cons 1000 note))))))
+  (entmod (append (entget en) (list (list -3 app)))))
+
+(defun c:DDFD_CABLE_ADJUST (/ sel en adj v note)
+  (princ "\n柜子长度调整：以这台柜子为起点或终点的电缆，网页计算时都加上这个值（负数为减）。")
+  (while (setq sel (entsel "\n选择柜名文字 <回车结束>: "))
+    (setq en (car sel))
+    (if (not (ddfd-cab-entity-p en))
+      (princ "  这不是柜子图层（CABLE_CABINET_*）上的对象。")
+      (progn
+        (setq adj (ddfd-cab-adjust en))
+        (princ (strcat "\n" (ddfd-entity-name en) " 当前调整："
+                       (if (= (car adj) 0.0) "无" (ddfd-cab-adjust-text (car adj)))))
+        (if (setq v (getreal "\n长度调整（米，负数为减，0 为取消）<不改>: "))
+          (progn
+            (setq note "")
+            (if (/= v 0.0)
+              (setq note (getstring T (strcat "\n说明（可空）" (if (= (cadr adj) "") "" (strcat "<" (cadr adj) ">")) ": "))))
+            (if (and (/= v 0.0) (= note "")) (setq note (cadr adj)))
+            (ddfd-cab-set-adjust en v note)
+            (princ (if (= v 0.0) "  已取消调整。" (strcat "  已设置 " (ddfd-cab-adjust-text v) "。")))
+            (ddfd-ov-refresh))))))
+  (princ))
+(defun c:DCA () (c:DDFD_CABLE_ADJUST))
+
 ;; —— 面板调用入口：SendCommand 发 (ddfd:cabinets "2F") 这样的表达式，发之前面板要确认 CMDACTIVE 为 0 ——
+;; (ddfd:adjust "句柄" 4.0 "说明")：设置柜子长度调整，米数为 0 取消
+(defun ddfd:adjust (h v note / en)
+  (if (and h (numberp v) (setq en (handent h)) (ddfd-cab-entity-p en))
+    (progn
+      (setq v (float v))
+      (ddfd-cab-set-adjust en v (if note note ""))
+      (princ (strcat "\n" (ddfd-entity-name en)
+                     (if (= v 0.0) " 已取消长度调整" (strcat " 长度调整 " (ddfd-cab-adjust-text v)))))
+      (ddfd-ov-refresh))
+    (princ (strcat "\n找不到柜子 " (if h h "") "（可能已删除，或不在当前图纸）")))
+  (princ))
 (defun ddfd:floors (spec) (ddfd-wiz-run 1 spec))
 (defun ddfd:rooms (floor) (ddfd-wiz-run 2 floor))
 (defun ddfd:cabinets (floor) (ddfd-wiz-run 3 floor))
@@ -2065,6 +2144,6 @@
 (defun ddfd:refresh () (ddfd-ov-refresh) (princ))
 (defun ddfd:check () (ddfd-ov-check) (princ))
 
-(princ (strcat "\n已加载电缆统计引导向导（版本 " *ddfd-cable-version* "）。输入 DCW 打开向导，DCV 查看定义总览。"))
+(princ (strcat "\n已加载电缆统计引导向导（版本 " *ddfd-cable-version* "）。输入 DCW 打开向导，DCV 查看定义总览，DCA 设置柜子长度调整。"))
 (princ "\n六步: 1建楼层 → 2定义房间 → 3标柜子 → 4画通道 → 5标竖井 → 6检查导出")
 (princ)
