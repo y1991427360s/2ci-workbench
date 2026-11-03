@@ -65,8 +65,12 @@ def load_cabinets(data_dir: Path) -> tuple[dict[str, Cabinet], list[str]]:
     return cabinets, warnings
 
 
-def load_segments(data_dir: Path, params: dict[str, float]) -> list[Segment]:
+def load_segments(data_dir: Path, params: dict[str, float], warnings: list[str] | None = None) -> list[Segment]:
+    """读取路径线段。长度比两端平面距离大 10 倍以上的段，按平面距离计算并在 warnings 里提示：
+    旧版 CAD 插件按三维距离导出直线长度，端点带 Z 高程时会算出几千米（真实电缆沟里的圆弧不会超过 10 倍）。"""
     segments: list[Segment] = []
+    if warnings is None:
+        warnings = []
     unit = params["CAD每米单位"]
     for i, row in enumerate(read_csv_dicts(data_csv_path(data_dir, "路径线段.csv", "route_segments.csv")), start=1):
         ax = parse_float(row.get("起点X"))
@@ -80,6 +84,13 @@ def load_segments(data_dir: Path, params: dict[str, float]) -> list[Segment]:
         length_units = parse_float(row.get("长度_CAD单位"))
         chord = math.hypot(bx - ax, by - ay)
         if length_units is None or length_units <= 0:
+            length_units = chord
+        elif length_units > chord * 10:
+            warnings.append(
+                f"路径长度异常：句柄 {normalize_text(row.get('句柄')) or '?'} 第 {normalize_text(row.get('段号')) or '?'} 段"
+                f"导出长度 {length_units / unit:.2f} m，两端平面距离只有 {chord / unit:.2f} m，"
+                "多半是线的端点带了 Z 高程，已按平面距离计算；建议在 CAD 里把这条线的 Z 改为 0 后重新导出"
+            )
             length_units = chord
         if length_units <= 0:
             continue

@@ -221,6 +221,26 @@ def test_load_cabinets_reads_adjust_columns():
     assert cabinets["柜B"].adjust == 0.0 and cabinets["柜B"].adjust_note == ""
 
 
+def test_segment_with_z_length_falls_back_to_plane():
+    import tempfile
+
+    from cable_stat.loaders import load_segments
+
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        (data_dir / "路径线段.csv").write_text(
+            "路径编号,楼层,起点X,起点Y,终点X,终点Y,长度_CAD单位,图层,句柄,段号\n"
+            "RC63E0,1F,0,0,3000,0,6810189.27,CABLE_ROUTE_1F,C63E0,1\n"
+            "RA,1F,0,0,2000,0,3141.59,CABLE_ROUTE_1F,A,1\n",
+            encoding="utf-8-sig",
+        )
+        warnings: list[str] = []
+        segments = load_segments(data_dir, PARAMS, warnings)
+    assert segments[0].length_m == 3.0, segments[0]
+    assert abs(segments[1].length_m - 3.14159) < 1e-6  # 半圆弧，正常保留
+    assert len(warnings) == 1 and "C63E0" in warnings[0] and "Z 高程" in warnings[0], warnings
+
+
 def test_boundary_and_concave_polygon_geometry():
     concave = make_room("凹房间", [(0, 0), (10, 0), (10, 10), (6, 10), (6, 4), (4, 4), (4, 10), (0, 10)])
     assert point_in_polygon((0, 5), concave.vertices)

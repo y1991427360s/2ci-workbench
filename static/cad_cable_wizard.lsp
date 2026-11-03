@@ -31,7 +31,7 @@
 (vl-load-com)
 
 ;; 改动本文件时同步更新版本号，加载时会打印，便于确认 CAD 里用的是哪一版
-(setq *ddfd-cable-version* "2026-11-03-adjust")
+(setq *ddfd-cable-version* "2026-11-03-plane")
 ;; 网页版工作台地址，第6步导出后可直接打开
 (setq *ddfd-web-url* "https://2ci.sen666.cn/")
 
@@ -582,9 +582,13 @@
 
 ;; —— 路径导出 ——
 
+;; 平面距离：只看 X、Y。端点带 Z 高程的线（如捕捉到有高程的对象）用 distance 会算出三维长度，曾出现 3 米的线导出成 6810 米
+(defun ddfd-dist2d (p1 p2)
+  (distance (list (car p1) (cadr p1)) (list (car p2) (cadr p2))))
+
 ;; 凸度为 b 的圆弧段：圆心角 = 4*atan|b|，弧长 = 弦长*圆心角 / (2*sin(圆心角/2))；b 为 0 就是弦长
 (defun ddfd-bulge-length (p1 p2 bulge / chord th)
-  (setq chord (distance p1 p2))
+  (setq chord (ddfd-dist2d p1 p2))
   (if (and bulge (> (abs bulge) 1e-12) (> chord 0.0))
     (progn
       (setq th (* 4.0 (atan (abs bulge))))
@@ -623,13 +627,13 @@
 
 ;; 写一段路径；起点终点重合的段（重复顶点、整圆）跳过，段号仍按原顶点序号，与旧版一致
 (defun ddfd-write-route-seg (fh routeid floor layer handle segno p1 p2 len)
-  (if (> (distance p1 p2) 1e-9)
+  (if (> (ddfd-dist2d p1 p2) 1e-9)
     (progn
       (ddfd-write-csv-row fh
         (list routeid floor
               (rtos (car p1) 2 6) (rtos (cadr p1) 2 6)
               (rtos (car p2) 2 6) (rtos (cadr p2) 2 6)
-              (rtos (if len len (distance p1 p2)) 2 6) layer handle (itoa segno)))
+              (rtos (if len len (ddfd-dist2d p1 p2)) 2 6) layer handle (itoa segno)))
       (setq *ddfd-seg-count* (1+ *ddfd-seg-count*)))))
 
 ;; 一个路径图元写成若干段：LINE 一段；ARC 一段（圆心、半径、起止角都在 OCS 里，逆时针从起点角到终点角）；
@@ -1509,7 +1513,7 @@
     1
     (progn
       (while (cdr pts)
-        (if (> (distance (car pts) (cadr pts)) 1e-9) (setq n (1+ n)))
+        (if (> (ddfd-dist2d (car pts) (cadr pts)) 1e-9) (setq n (1+ n)))
         (setq pts (cdr pts)))
       n)))
 
@@ -1524,6 +1528,9 @@
     (progn
       (if (= floor "")
         (ddfd-ov-issue "err" 4 "楼层未知" handle (strcat "通道所在图层看不出楼层：" layer)))
+      ;; 导出只按平面长度算，Z 不影响结果；但带高程的线多半是误捕捉画出来的，提醒一下
+      (if (vl-some '(lambda (p) (and (caddr p) (> (abs (caddr p)) 1e-6))) pts)
+        (ddfd-ov-issue "warn" 4 "通道有高程" handle "这条通道的端点 Z 不为 0（统计按平面长度计算，不受影响），建议把 Z 改为 0"))
       (setq *ddfd-ov-routes* (cons (list floor handle (ddfd-ov-route-segs typ pts) pts) *ddfd-ov-routes*)))
     (ddfd-ov-issue "err" 4 "不支持的图元" handle
       (strcat "通道图层上的 " (if (= typ "POLYLINE") "POLYLINE变体" typ) " 不会被导出，请炸开或改成多段线"))))

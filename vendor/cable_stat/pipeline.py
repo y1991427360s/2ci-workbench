@@ -85,7 +85,8 @@ def run(
         alias_warnings += apply_aliases(cabinets, aliases)
         alias_warnings += apply_case_insensitive_matches(cabinets, required_names)
         rule_overrides, override_warnings = load_rule_overrides(data_dir)
-        segments = load_segments(data_dir, params)
+        segment_warnings: list[str] = []
+        segments = load_segments(data_dir, params, segment_warnings)
         shafts = load_shafts(data_dir, params)
         rooms, room_warnings = load_rooms(data_dir)
         advance(22, "构建路径网络与柜子接入")
@@ -98,7 +99,7 @@ def run(
         floor_offsets, offset_warnings = compute_floor_offsets(collect_floors(segments, cabinets, shafts), shafts)
 
         issues = (
-            param_warnings + cabinet_warnings + alias_warnings + override_warnings + duplicate_cable_ids(rows)
+            param_warnings + cabinet_warnings + alias_warnings + override_warnings + segment_warnings + duplicate_cable_ids(rows)
             + room_warnings + graph_issues + offset_warnings
         )
         if not (data_dir / PARAMS_FILE).exists():
