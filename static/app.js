@@ -300,7 +300,7 @@ function cables(c) {
 
 async function parameters(c) {
     const data = await api('/projects/' + current.id + '/params');
-    c.innerHTML = '<div class="panel"><h3>计算参数</h3><p class="muted" style="margin-bottom:16px">参数随当前工程保存。默认使用毫米图：1 米 = 1000 CAD 单位。</p>' + table(['参数', '值', '说明'], data.specs.map(s => [esc(s.name), '<input type="number" step="any" data-param="' + esc(s.name) + '" value="' + esc(data.values[s.name]) + '">', esc(s.note)])) + '<div class="actions"><button id="save-params" class="primary">保存参数配置</button></div></div>';
+    c.innerHTML = '<div class="panel"><h3>计算参数</h3><p class="muted" style="margin-bottom:16px">参数随当前工程保存。默认使用毫米图：1 米 = 1000 CAD 单位。</p>' + table(['参数', '值', '说明'], data.specs.map(s => [esc(s.name), '<input type="number" step="any" data-param="' + esc(s.name) + '" value="' + esc(data.values[s.name]) + '">', esc(s.note)])) + '<div class="actions"><button id="save-params" class="primary">保存参数配置</button></div></div>' + paramPrinciples(data.values);
     $('#save-params').onclick = () => action(async () => {
         const values = {};
         document.querySelectorAll('[data-param]').forEach(i => values[i.dataset.param] = Number(i.value));
@@ -308,6 +308,25 @@ async function parameters(c) {
         await reload();
         notify('计算参数已保存，请重新计算');
     });
+}
+
+// 计算原则说明：数值取本工程已保存的参数，和 vendor/cable_stat/calc.py 的规则保持一致
+function paramPrinciples(values) {
+    const num = (k, d) => { const x = Number(values[k]); return Number.isFinite(x) ? x : d; };
+    const r1 = x => Math.round(x * 10) / 10;
+    const add = num('不拐弯修正', 7), mul = num('拐弯倍率', 1.2), room = num('跨房间修正', 3);
+    const angle = num('拐弯判定角度', 5), shaft = num('竖井高度', 4.5), warn = num('差值提醒', 5);
+    const base = 50, straight = r1(base + add), bent = r1((base + add) * mul), roomed = r1(bent + room);
+    const item = (title, text) => '<p><span><b>' + title + '</b>：' + text + '</span></p>';
+    return '<div class="panel"><h3>计算原则</h3><p class="muted">下面的数值按本工程当前已保存的参数显示，改参数并保存后会同步变化。每条电缆实际用了哪条规则，写在计算结果的“规则”列里。</p><div class="steps">'
+        + item('基础路径长度', '柜子先垂直接到同层最近的通道线（这段垂线也计入长度），再沿通道网找起点柜到终点柜的最短路径；跨楼层时经竖井，加竖井高度（当前 ' + shaft + ' 米，竖井.csv 里单独填了高度的以那个为准）。图上长度按“CAD每米单位”换算成米。')
+        + item('怎样算拐弯', '以路径第一段通道的方向为基准，后面任何一段偏转超过“拐弯判定角度”（当前 ' + angle + '°）或出现折返，就算拐弯；经过竖井（跨楼层）一律按拐弯算。全程沿同一方向走（包括只走一段通道）算不拐弯。柜子到通道的垂直接入段不参与判断。')
+        + item('不拐弯', '自动统计 = 基础路径长度 + 不拐弯修正（当前 ' + add + ' 米）。例：基础 ' + base + ' 米 → ' + base + ' + ' + add + ' = ' + straight + ' 米。')
+        + item('拐弯 / 跨楼层', '自动统计 =（基础路径长度 + 不拐弯修正）× 拐弯倍率（当前 ' + mul + '），即先加余量再放大。例：基础 ' + base + ' 米 →（' + base + ' + ' + add + '）× ' + mul + ' = ' + bent + ' 米。')
+        + item('强制规则', '起终点柜名在强制规则（强制规则.csv）里登记过的电缆，直接用“基础路径长度 + 规则里填的余量”，不再区分拐不拐弯，也不乘倍率。')
+        + item('最后直接加（不乘倍率）', '定义了房间时，路径没有完整落在同一个房间内（跨房间或出房间）加“跨房间修正”（当前 ' + room + ' 米）；起点或终点柜子在 CAD 里设置了长度调整的，再加上它的米数（可为负）。例：上面拐弯的例子若还跨房间 → ' + bent + ' + ' + room + ' = ' + roomed + ' 米。')
+        + item('结果取值', '自动统计四舍五入保留 1 位小数，另给“向上取整”值；与清册手工长度相差超过“差值提醒”（当前 ' + warn + ' 米）时标黄提醒。')
+        + '</div></div>';
 }
 
 async function aliases(c) {
