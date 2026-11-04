@@ -410,6 +410,12 @@ def load_workbook_rows(workbook_path: Path) -> tuple[Any, Any, dict[str, int], l
             headers = {name: (col + 1 if col >= ceil_col else col) for name, col in headers.items()}
         ws.cell(header_row, ceil_col).value = "向上取整"
         headers["向上取整"] = ceil_col
+    # 「基础路径」「计算式」放在表头最右侧；清册里已有（比如拿上次的结果再算）就沿用原列
+    for name in ("基础路径", "计算式"):
+        if name not in headers:
+            col = max(headers.values()) + 1
+            ws.cell(header_row, col).value = name
+            headers[name] = col
     return wb, ws, headers, rows, sorted(names)
 
 

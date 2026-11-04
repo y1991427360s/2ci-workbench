@@ -29,12 +29,27 @@ DETAIL_HEADERS = [
     "规则",
     "状态",
     "路径说明",
+    "基础路径",
+    "计算式",
 ]
 
 # 规则类别：可视化页面和汇总表按它分组
 RULE_STRAIGHT = "不拐弯"
 RULE_BENT = "拐弯/跨楼层"
 RULE_OVERRIDE = "强制规则"
+
+
+def _num(value: float) -> str:
+    """计算式里的数字：最多两位小数，去掉末尾的 0。"""
+    text = f"{value:.2f}".rstrip("0").rstrip(".")
+    return "0" if text in ("-0", "") else text
+
+
+def _signed_terms(values: list[float]) -> str:
+    """把加项写成“ + 3 - 2”；没有加项时写“ + 0”。"""
+    if not values:
+        return " + 0"
+    return "".join(f" - {_num(-v)}" if v < 0 else f" + {_num(v)}" for v in values)
 
 
 def is_route_bent(graph: RouteGraph, edge_metas: list[dict[str, Any]], angle_deg: float | None = None) -> bool:
@@ -164,6 +179,8 @@ def calculate_rows(
         auto_value: float | str = ""
         diff: float | str = ""
         base_length: float | str = ""
+        base_text = ""
+        formula = ""
         extra: float | str = ""
         rule = ""
         rule_kind = ""
@@ -200,11 +217,14 @@ def calculate_rows(
             # 柜子长度调整（CAD 里给柜子设的加减米数）和跨房间修正一样，在倍率之后直接加，不参与放大
             adjusts = [cab for cab in (cabinets.get(start), cabinets.get(end)) if cab is not None and cab.adjust]
             added = room_extra + sum(cab.adjust for cab in adjusts)
+            added_terms = ([room_extra] if crosses_room else []) + [cab.adjust for cab in adjusts]
+            base_num = _num(dist_m)
             override = rule_overrides.get((start, end)) or rule_overrides.get((end, start))
             if override is not None:
                 auto_value = round_half_up(dist_m + float(override["extra"]) + added, 1)
                 rule = f"强制规则 {override['extra']:+g}"
                 rule_kind = RULE_OVERRIDE
+                formula = f"{base_num}{_signed_terms([float(override['extra'])])}{_signed_terms(added_terms)}"
                 if override["note"]:
                     rule += f"（{override['note']}）"
             elif bent:
@@ -213,10 +233,12 @@ def calculate_rows(
                 auto_value = round_half_up((dist_m + base_extra) * multiplier + added, 1)
                 rule = f"路径拐弯/跨楼层（+{base_extra:g}）×{multiplier:g}"
                 rule_kind = RULE_BENT
+                formula = f"({base_num} + {_num(base_extra)}) × {_num(multiplier)}{_signed_terms(added_terms)}"
             else:
                 auto_value = round_half_up(dist_m + params["不拐弯修正"] + added, 1)
                 rule = f"路径不拐弯 +{params['不拐弯修正']:g}"
                 rule_kind = RULE_STRAIGHT
+                formula = f"{base_num} + {_num(params['不拐弯修正'])}{_signed_terms(added_terms)}"
             extra = round(auto_value - dist_m, 3)
             if crosses_room:
                 rule += f"；跨房间 +{room_extra:g}"
@@ -225,6 +247,8 @@ def calculate_rows(
                 if cab.adjust_note:
                     rule += f"（{cab.adjust_note}）"
             base_length = round(dist_m, 3)
+            base_text = f"{base_num}m"
+            formula += f" ≈ {auto_value:.1f} m"
             manual = row["手工长度"]
             if isinstance(manual, (int, float)) and not isinstance(manual, bool):
                 diff = round_half_up(auto_value - manual, 1)
@@ -252,6 +276,8 @@ def calculate_rows(
             "规则": rule,
             "状态": status,
             "路径说明": desc,
+            "基础路径": base_text,
+            "计算式": formula,
         }
         detail_rows.append(detail)
         visual_cables.append(

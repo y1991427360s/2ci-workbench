@@ -222,6 +222,19 @@ def write_results_to_workbook(
         elif diff_alert(detail, params):
             auto_cell.fill = _WARN_FILL
             auto_cell.comment = Comment(f"与手工长度相差 {detail['差值']} 米", "电缆统计")
+    base_col = headers.get("基础路径")
+    formula_col = headers.get("计算式")
+    for detail in detail_rows:
+        row_no = detail["行号"]
+        if base_col:
+            ws.cell(row_no, base_col).value = detail.get("基础路径") or None
+        if formula_col:
+            ws.cell(row_no, formula_col).value = detail.get("计算式") or None
+    for col, width in ((base_col, 12), (formula_col, 34)):
+        if col:
+            dim = ws.column_dimensions[get_column_letter(col)]
+            if not dim.width or dim.width < width:
+                dim.width = width
     for col in (auto_col, ceil_col):
         dim = ws.column_dimensions[get_column_letter(col)]
         if not dim.width or dim.width < 9:
