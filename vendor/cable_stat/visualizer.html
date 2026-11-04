@@ -2048,9 +2048,10 @@
       const base = cable.base_length.toFixed(2);
       const add = Number(params["不拐弯修正"]);
       const k = Number(params["拐弯倍率"]);
+      const bentAdd = Number(params["拐弯修正"] ?? params["不拐弯修正"]);
       const room = cable.crosses_room ? ` + ${Number(params["跨房间修正"])}` : "";
       if (cable.rule_kind === "不拐弯") return `${base} + ${add}${room} ≈ ${cable.auto_length} m`;
-      if (cable.rule_kind === "拐弯/跨楼层") return `(${base} + ${add}) × ${k}${room} ≈ ${cable.auto_length} m`;
+      if (cable.rule_kind === "拐弯/跨楼层") return `(${base} + ${bentAdd}) × ${k}${room} ≈ ${cable.auto_length} m`;
       return "";
     }
     function copyText(text, button) {

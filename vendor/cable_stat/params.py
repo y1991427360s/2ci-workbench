@@ -39,8 +39,9 @@ class ParamSpec:
 PARAM_SPECS: tuple[ParamSpec, ...] = (
     ParamSpec("CAD每米单位", 1000.0, "图按米画填1，按厘米画填100，按毫米画填1000", 0.0, None, True),
     ParamSpec("竖井高度", 4.5, "跨楼层经竖井加的高度，单位米（竖井.csv 里单独填了高度的以那个为准）", 0.0),
-    ParamSpec("不拐弯修正", 7.0, "路径不拐弯时加的余量，单位米"),
-    ParamSpec("拐弯倍率", 1.2, "拐弯或跨楼层时先加余量再乘的倍率", 0.0, None, True),
+    ParamSpec("不拐弯修正", 6.0, "路径不拐弯时加的余量，单位米"),
+    ParamSpec("拐弯修正", 7.0, "路径拐弯或跨楼层时加的余量，单位米；之后再乘拐弯倍率（旧工程没填时沿用不拐弯修正的值）"),
+    ParamSpec("拐弯倍率", 1.2, "拐弯或跨楼层时，先加“拐弯修正”再乘的倍率", 0.0, None, True),
     ParamSpec(
         "吸附容差", 0.05,
         "单位跟图纸一致；线头相距在此范围内视为连通。端点都用捕捉画的保持默认即可，线头有小缝隙时再调大（毫米图最多几十）",
@@ -68,6 +69,7 @@ def load_params_with_warnings(data_dir: Path) -> tuple[dict[str, float], list[st
     """读取 参数.csv；非法值、未知参数名给出告警并沿用默认值，不中断计算。"""
     params = default_params()
     warnings: list[str] = []
+    seen: set[str] = set()
     for row in read_csv_dicts(data_dir / PARAMS_FILE):
         key = normalize_text(row.get("参数"))
         if not key:
@@ -88,6 +90,11 @@ def load_params_with_warnings(data_dir: Path) -> tuple[dict[str, float], list[st
             warnings.append(f"参数提示：参数“{key}”={value:g} {problem}，已按默认值 {spec.default:g} 计算")
             continue
         params[key] = value
+        seen.add(key)
+    # “拐弯修正”是后加的参数：旧工程的 参数.csv 写了“不拐弯修正”却没有它时，沿用该值，保证老结果不变；
+    # 新工程（两项都没写）按默认值：不拐弯 6、拐弯 7
+    if "拐弯修正" not in seen and "不拐弯修正" in seen:
+        params["拐弯修正"] = params["不拐弯修正"]
     return params, warnings
 
 

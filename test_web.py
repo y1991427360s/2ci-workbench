@@ -62,7 +62,7 @@ class WebTests(unittest.TestCase):
         result = self.call('/projects/'+pid+'/calculate', 'POST', {})
         self.assertEqual(result.status_code, 200, result.json)
         self.assertEqual(result.json['result']['ok'], 1)
-        self.assertEqual(result.json['result']['summary']['ceil_sum'], 17)
+        self.assertEqual(result.json['result']['summary']['ceil_sum'], 16)
         import json
         visual = json.loads((web.ROOT/pid/'outputs'/'路径可视化数据.json').read_text(encoding='utf-8'))
         self.assertEqual(visual['title'], '电缆路径可视化 · 验收工程')

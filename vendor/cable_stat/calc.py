@@ -229,7 +229,7 @@ def calculate_rows(
                     rule += f"（{override['note']}）"
             elif bent:
                 multiplier = params["拐弯倍率"]
-                base_extra = params["不拐弯修正"]
+                base_extra = params.get("拐弯修正", params["不拐弯修正"])
                 auto_value = round_half_up((dist_m + base_extra) * multiplier + added, 1)
                 rule = f"路径拐弯/跨楼层（+{base_extra:g}）×{multiplier:g}"
                 rule_kind = RULE_BENT

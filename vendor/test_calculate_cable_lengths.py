@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 from pathlib import Path
 
 from calculate_cable_lengths import (
@@ -328,6 +329,32 @@ def test_bent_path_plus_7_then_times_1_2():
     assert "拐弯" in row["规则"]
     assert "×1.2" in row["规则"]
     assert row["自动统计"] == 30.0, row  # (9m + 9m + 7) × 1.2
+
+
+def test_bent_and_straight_use_separate_extras():
+    """不拐弯修正与拐弯修正分开设置：拐弯先加拐弯修正再乘倍率。"""
+    params = {**PARAMS, "不拐弯修正": 6.0, "拐弯修正": 8.0}
+    segments = [make_segment(1, 0, 0, 10000, 0), make_segment(2, 10000, 0, 10000, 10000)]
+    cabinets = {
+        "柜A": make_cabinet("柜A", 1000, 0),
+        "柜B": make_cabinet("柜B", 10000, 9000),
+        "柜C": make_cabinet("柜C", 5000, 0),
+    }
+    graph, nodes, _ = build_graph(segments, cabinets, [], ["柜A", "柜B", "柜C"], params)
+    details, _ = calculate_rows(make_rows([("柜A", "柜B"), ("柜A", "柜C")]), graph, nodes, cabinets, params)
+    assert details[0]["自动统计"] == 31.2, details[0]  # (18 + 8) × 1.2
+    assert details[0]["计算式"].startswith("(18 + 8) × 1.2"), details[0]
+    assert details[1]["自动统计"] == 10.0, details[1]  # 4 + 6
+    assert details[1]["计算式"].startswith("4 + 6"), details[1]
+
+
+def test_old_params_file_without_bent_extra_keeps_straight_value():
+    """旧工程 参数.csv 只有不拐弯修正时，拐弯修正沿用它；新工程按默认 6 / 7。"""
+    from cable_stat.params import load_params
+    with tempfile.TemporaryDirectory() as tmp:
+        assert (load_params(Path(tmp))["不拐弯修正"], load_params(Path(tmp))["拐弯修正"]) == (6.0, 7.0)
+        (Path(tmp) / "参数.csv").write_text("参数,值,备注" + chr(10) + "不拐弯修正,5," + chr(10), encoding="utf-8-sig")
+        assert load_params(Path(tmp))["拐弯修正"] == 5.0
 
 
 def test_t_junction_connects():
