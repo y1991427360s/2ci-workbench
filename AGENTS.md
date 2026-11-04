@@ -1,5 +1,21 @@
 # Repository Guidelines
 
+> 本文件与同目录 `CLAUDE.md` 内容必须完全一致（Codex 读 AGENTS.md，Claude Code 读 CLAUDE.md），修改一份时同步另一份。
+
+## 工作流程联动（必读）
+
+本项目（https://2ci.sen666.cn/ ，按电缆清册统计电缆长度）是用户 ys199 日常二次设计工作流程的一部分，和下面两个目录相互对应：
+
+- `D:\Syncthing\Oracle-Sync\工作智能体\`：工作流程文档的唯一来源。本项目对应 `工作流程\电缆路径统计-CAD向导与定义总览.md`，其中“网页长度计算规则”一节记录了当前计算规则、默认参数和结果表的列。
+- `D:\Syncthing\Oracle-Sync\LISP\`：CAD 插件仓库。本项目的 `static\cad_cable_wizard.lsp`（CAD 向导）在那里的 `CLAUDE.md`“电缆路径统计插件”一节登记。
+
+有必要时同步记录：
+
+- 改了计算规则、参数（新增、改名或改默认值）、上传和计算步骤、结果工作簿的列、路径可视化的用法，在同一轮更新上面的流程文档，并把 frontmatter 的 `updated` 改为当天。
+- 改了 CAD 向导插件或它导出的 CSV 列，除了更新流程文档，还要按 `LISP\CLAUDE.md` 的约定处理（桌面、`static\`、线上三处副本一致，GBK + CRLF）。
+- 只改样式、文案、内部重构或测试，用户的操作和结果都没有变化时，不必更新。
+- 这两个目录里的 `CLAUDE.md`、`AGENTS.md`、`ANTIGRAVITY.md` 各自三份保持一致；交付时说明流程文档改了没有、改了什么。
+
 ## Project Structure & Module Organization
 
 - `app.py`: Flask routes, authentication, uploads, project storage, and adapters to the calculation engines.
