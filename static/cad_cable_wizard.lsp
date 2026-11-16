@@ -1,21 +1,22 @@
 ;;; 多氟多电缆长度自动统计 - CAD 分步引导向导（自包含，含导出命令）
-;;; 只需 APPLOAD 本文件，然后输入 DCW（或 DDFD_CABLE_WIZARD），按菜单一步步做即可。支持中望 CAD 2026 和 AutoCAD 2018。
+;;; 只需 APPLOAD 本文件，然后输入 DDFD 打开向导菜单，按菜单一步步做即可。支持中望 CAD 2026 和 AutoCAD 2018。
+;;; 全部功能都从这一个命令进入，不再定义其他命令。
 ;;;
-;;; 六个步骤（菜单和分步命令一一对应，可以随时跳到任意一步，想做哪层做哪层）:
-;;;   1 建楼层     DDFD_CABLE_LAYERS      写出楼层（可含 B1F），自动创建 CABLE_* 图层
-;;;   2 定义房间   DDFD_CABLE_ROOMS       给闭合多段线写房间名称（放到 CABLE_ROOM_nF）
-;;;   3 标柜子     DDFD_CABLE_CABINETS    点柜子出线点并写柜名文字（柜名已标过会提醒）
-;;;   4 画通道     DDFD_CABLE_ROUTES      沿电缆沟/桥架画走线通道（自动开端点捕捉）
-;;;   5 标竖井     DDFD_CABLE_SHAFTS      标跨楼层竖井（自动写 ZJn_楼层 配对文字）
-;;;   6 检查导出   DDFD_CABLE_EXPORT_RUN  体检后自动导出4个CSV到桌面，回网页上传计算
+;;; 菜单里的六个步骤（可以随时跳到任意一步，想做哪层做哪层）:
+;;;   [1] 建楼层     写出楼层（可含 B1F），自动创建 CABLE_* 图层
+;;;   [2] 定义房间   给闭合多段线写房间名称（放到 CABLE_ROOM_nF）
+;;;   [3] 标柜子     点柜子出线点并写柜名文字（柜名已标过会提醒）
+;;;   [4] 画通道     沿电缆沟/桥架画走线通道（自动开端点捕捉）
+;;;   [5] 标竖井     标跨楼层竖井（自动写 ZJn_楼层 配对文字）
+;;;   [6] 检查导出   体检后自动导出4个CSV到桌面，回网页上传计算
 ;;;
-;;; 其他命令:
-;;;   DCW                      打开向导菜单（DDFD_CABLE_WIZARD 的短命令）
-;;;   DCV                      定义总览：每层的房间、房间里的柜子、通道、竖井配对和问题清单（DDFD_CABLE_LIST 同）
-;;;   DCA                      柜子长度调整：给某台柜子的电缆统一加/减几米，导出到 柜子坐标.csv 的“长度调整”列（DDFD_CABLE_ADJUST 同）
-;;;   DDFD_EXPORT_CABLE_ROUTE  仅导出4个CSV（与 cad_export_cable_route.lsp 相同，可手动选目录）
-;;;   DDFD_ROOM_CHECK          检查房间：列出将导出的房间，定位房间图层上未命名/无效的多段线
-;;;   DDFD_CLEAN_ROOM_LAYERS   把房间图层上未命名的多段线移到 0 层（先确认，可 U 撤销）
+;;; 菜单里的其他功能:
+;;;   [A] 从头一步步来
+;;;   [L] 定义总览：每层的房间、房间里的柜子、通道、竖井配对和问题清单
+;;;   [T] 柜子长度调整：给某台柜子的电缆统一加/减几米，导出到 柜子坐标.csv 的“长度调整”列
+;;;   [R] 检查房间：列出将导出的房间，定位房间图层上未命名/无效的多段线
+;;;   [C] 把房间图层上未命名的多段线移到 0 层（先确认，可 U 撤销）
+;;;   [E] 仅导出4个CSV到手动指定的目录
 ;;;
 ;;; 面板调用的函数在文件末尾（ddfd:floors、ddfd:cabinets 等），总览文件格式见“定义总览”一节。
 ;;;
@@ -31,7 +32,7 @@
 (vl-load-com)
 
 ;; 改动本文件时同步更新版本号，加载时会打印，便于确认 CAD 里用的是哪一版
-(setq *ddfd-cable-version* "2026-11-03-plane")
+(setq *ddfd-cable-version* "2026-11-09-single-cmd")
 ;; 网页版工作台地址，第6步导出后可直接打开
 (setq *ddfd-web-url* "https://2ci.sen666.cn/")
 
@@ -465,10 +466,10 @@
     (princ (strcat "\n注意：同层房间重名 " key "，统计时会忽略这些范围，请改名或删掉多余的一份。")))
   (if (cadr info)
     (princ (strcat "\n注意：CABLE_ROOM 图层上有 " (itoa (length (cadr info)))
-                   " 个未命名多段线（不是用“定义房间”建的），不会导出。输入 DDFD_ROOM_CHECK 可定位查看。")))
+                   " 个未命名多段线（不是用“定义房间”建的），不会导出。输入 DDFD 选 [R] 可定位查看。")))
   (if (caddr info)
     (princ (strcat "\n注意：有 " (itoa (length (caddr info)))
-                   " 个已命名房间不闭合、含圆弧、面积为零或图层名看不出楼层，不会导出。输入 DDFD_ROOM_CHECK 可定位查看。")))
+                   " 个已命名房间不闭合、含圆弧、面积为零或图层名看不出楼层，不会导出。输入 DDFD 选 [R] 可定位查看。")))
   (princ))
 
 ;; 把选择集缩放到可见范围（用 DXF 顶点算包围盒，不依赖 COM；临时关捕捉以免点被吸走）
@@ -846,7 +847,7 @@
           nil)))
     (progn (princ "\n已取消导出，未覆盖项目数据。") nil)))
 
-(defun c:DDFD_EXPORT_CABLE_ROUTE (/ prefix outdir)
+(defun ddfd-cmd-export-dir (/ prefix outdir)
   (setq prefix (getvar "DWGPREFIX"))
   (setq outdir (ddfd-clean-path (getstring T (strcat "\n导出目录 <" prefix "cable_export>: "))))
   (if (= outdir "")
@@ -864,7 +865,7 @@
 )
 
 ;; 定位房间问题：选中并缩放到 CABLE_ROOM 图层上未命名、或已命名但无效的多段线（只选中，不修改图形）
-(defun c:DDFD_ROOM_CHECK (/ info ss h en)
+(defun ddfd-cmd-room-check (/ info ss h en)
   (setq info (ddfd-room-collect))
   (ddfd-room-report info)
   (setq ss (ssadd))
@@ -876,12 +877,12 @@
       (foreach h (append (cadr info) (caddr info)) (princ (strcat " " h)))
       (ddfd-room-zoom ss)
       (sssetfirst nil ss)
-      (princ "\n已选中并缩放到这些多段线。图框/表格之类请在特性里改回原图层或删除；也可输入 DDFD_CLEAN_ROOM_LAYERS 把未命名的统一移到 0 层。"))
+      (princ "\n已选中并缩放到这些多段线。图框/表格之类请在特性里改回原图层或删除；也可在 DDFD 菜单选 [C] 把未命名的统一移到 0 层。"))
     (princ "\n房间图层没有问题图形。"))
   (princ))
 
 ;; 把 CABLE_ROOM 图层上未命名的多段线移到 0 层：先列出并确认，U 一步即可撤销
-(defun c:DDFD_CLEAN_ROOM_LAYERS (/ info h en ed ans cnt)
+(defun ddfd-cmd-room-clean (/ info h en ed ans cnt)
   (setq info (ddfd-room-collect))
   (if (null (cadr info))
     (princ "\nCABLE_ROOM 图层上没有未命名的多段线。")
@@ -1957,7 +1958,7 @@
           (princ "\n文件：柜子坐标.csv、路径线段.csv、竖井.csv、房间范围.csv。"))))
     (progn
       (setq *ddfd-wiz-last-export* (list "fail" "" (ddfd-ov-now)))
-      (princ "\n无法读取或访问 Windows 桌面目录，未导出任何数据。可改用 DDFD_EXPORT_CABLE_ROUTE 手动指定导出目录。")))
+      (princ "\n无法读取或访问 Windows 桌面目录，未导出任何数据。可在 DDFD 菜单选 [E] 手动指定导出目录。")))
   ok)
 
 (defun ddfd-wiz-step6 (/ errs)
@@ -1994,7 +1995,7 @@
   (if go (if (ddfd-wiz-yesno "\n第4步完成。进入第5步(标竖井)?" "Y") (ddfd-wiz-step5) (setq go nil)))
   (if go (if (ddfd-wiz-yesno "\n第5步完成。进入第6步(检查导出)?" "Y") (ddfd-wiz-step6) (setq go nil)))
   (if (not go)
-    (princ "\n已停在当前步骤。之后输入 DDFD_CABLE_WIZARD 可从任意步骤继续。")
+    (princ "\n已停在当前步骤。之后输入 DDFD 可从任意步骤继续。")
   )
 )
 
@@ -2006,7 +2007,7 @@
   (defun *error* (msg)
     (ddfd-wiz-restore)
     (princ (strcat "\n已中断: " msg))
-    (princ "\n可重新输入 DDFD_CABLE_WIZARD 从任意步骤继续。")
+    (princ "\n可重新输入 DDFD 从任意步骤继续。")
     (ddfd-ov-refresh)
     (princ)
   )
@@ -2043,6 +2044,10 @@
     (princ "\n  （读取当前状态失败，步骤仍可使用）\n  [1] 建楼层  [2] 定义房间  [3] 标柜子  [4] 画通道  [5] 标竖井  [6] 检查导出"))
   (princ "\n  [A] 从头一步步来（新图推荐）")
   (princ "\n  [L] 查看定义总览：每层的房间、柜子、通道、竖井")
+  (princ "\n  [T] 柜子长度调整：给某台柜子的电缆统一加/减几米")
+  (princ "\n  [R] 检查房间：定位房间图层上未命名/无效的多段线")
+  (princ "\n  [C] 把房间图层上未命名的多段线移到 0 层（可 U 撤销）")
+  (princ "\n  [E] 仅导出四个CSV到指定目录")
   (princ "\n  [Q] 退出向导")
   (princ)
 )
@@ -2051,35 +2056,30 @@
   (if (ddfd-ov-check) (ddfd-ov-print))
   (princ))
 
-(defun c:DDFD_CABLE_WIZARD (/ choice first done)
+(defun c:DDFD (/ choice first done)
   (setq first T)
   (setq done nil)
   (while (not done)
     (ddfd-wiz-menu (ddfd-ov-refresh))
-    (initget "1 2 3 4 5 6 A L Q")
-    (setq choice (getkword (strcat "\n选择要做的步骤 [1/2/3/4/5/6/A/L/Q] <" (if first "A" "Q") ">: ")))
+    (initget "1 2 3 4 5 6 A L T R C E Q")
+    (setq choice (getkword (strcat "\n选择要做的步骤 [1/2/3/4/5/6/A/L/T/R/C/E/Q] <" (if first "A" "Q") ">: ")))
     (if (not choice) (setq choice (if first "A" "Q")))
     (setq first nil)
     (cond
       ((= choice "Q") (setq done T))
       ((= choice "A") (ddfd-wiz-run 0 nil) (setq done T))
       ((= choice "L") (ddfd-wiz-list))
+      ((= choice "T") (ddfd-cmd-adjust))
+      ((= choice "R") (ddfd-cmd-room-check))
+      ((= choice "C") (ddfd-cmd-room-clean))
+      ((= choice "E") (ddfd-cmd-export-dir) (ddfd-ov-refresh))
       (T (ddfd-wiz-run (atoi choice) nil))
     )
   )
-  (princ "\n向导已退出，单步做完会回到菜单；随时输入 DCW 或 DDFD_CABLE_WIZARD 再进。")
+  (princ "\n向导已退出，单步做完会回到菜单；随时输入 DDFD 再进。")
   (princ)
 )
 
-(defun c:DCW () (c:DDFD_CABLE_WIZARD))
-(defun c:DCV () (ddfd-wiz-list))
-(defun c:DDFD_CABLE_LIST () (ddfd-wiz-list))
-(defun c:DDFD_CABLE_LAYERS () (ddfd-wiz-run 1 nil))
-(defun c:DDFD_CABLE_ROOMS () (ddfd-wiz-run 2 nil))
-(defun c:DDFD_CABLE_CABINETS () (ddfd-wiz-run 3 nil))
-(defun c:DDFD_CABLE_ROUTES () (ddfd-wiz-run 4 nil))
-(defun c:DDFD_CABLE_SHAFTS () (ddfd-wiz-run 5 nil))
-(defun c:DDFD_CABLE_EXPORT_RUN () (ddfd-wiz-run 6 nil))
 
 ;; —— 柜子长度调整 ——
 ;; 在现有计算规则之外，给某台柜子的电缆统一加或减一段长度（如外置端子箱要多绕 4 米）。
@@ -2108,7 +2108,7 @@
                       (if (/= note "") (list (cons 1000 note))))))
   (entmod (append (entget en) (list (list -3 app)))))
 
-(defun c:DDFD_CABLE_ADJUST (/ sel en adj v note)
+(defun ddfd-cmd-adjust (/ sel en adj v note)
   (princ "\n柜子长度调整：以这台柜子为起点或终点的电缆，网页计算时都加上这个值（负数为减）。")
   (while (setq sel (entsel "\n选择柜名文字 <回车结束>: "))
     (setq en (car sel))
@@ -2128,7 +2128,6 @@
             (princ (if (= v 0.0) "  已取消调整。" (strcat "  已设置 " (ddfd-cab-adjust-text v) "。")))
             (ddfd-ov-refresh))))))
   (princ))
-(defun c:DCA () (c:DDFD_CABLE_ADJUST))
 
 ;; —— 面板调用入口：SendCommand 发 (ddfd:cabinets "2F") 这样的表达式，发之前面板要确认 CMDACTIVE 为 0 ——
 ;; (ddfd:adjust "句柄" 4.0 "说明")：设置柜子长度调整，米数为 0 取消
@@ -2151,6 +2150,6 @@
 (defun ddfd:refresh () (ddfd-ov-refresh) (princ))
 (defun ddfd:check () (ddfd-ov-check) (princ))
 
-(princ (strcat "\n已加载电缆统计引导向导（版本 " *ddfd-cable-version* "）。输入 DCW 打开向导，DCV 查看定义总览，DCA 设置柜子长度调整。"))
+(princ (strcat "\n已加载电缆统计引导向导（版本 " *ddfd-cable-version* "）。输入 DDFD 打开向导（总览、柜子长度调整等功能都在菜单里）。"))
 (princ "\n六步: 1建楼层 → 2定义房间 → 3标柜子 → 4画通道 → 5标竖井 → 6检查导出")
 (princ)

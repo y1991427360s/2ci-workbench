@@ -40,7 +40,7 @@ def check_suspicious_rooms(rooms: list[Room], cabinets: dict[str, Cabinet], segm
     for room in rooms:
         where = f"{room.floor} {room.name}" + (f"（句柄 {room.handle}）" if room.handle else "")
         if room.name.startswith("房间_"):
-            warnings.append(f"房间范围 {where} 没有名称（名字是CAD句柄自动编的），可能不是用向导“定义房间”建的，请在CAD里用 DDFD_ROOM_CHECK 核对")
+            warnings.append(f"房间范围 {where} 没有名称（名字是CAD句柄自动编的），可能不是用向导“定义房间”建的，请在CAD里输入 DDFD 选 [R] 核对")
         x0, y0, x1, y1 = polygon_bbox(room.vertices)
         has_cabinet = any(
             cab.floor == room.floor and x0 <= cab.x <= x1 and y0 <= cab.y <= y1
@@ -55,7 +55,7 @@ def check_suspicious_rooms(rooms: list[Room], cabinets: dict[str, Cabinet], segm
             for seg in segments
         )
         if not has_cabinet and not has_route:
-            warnings.append(f"房间范围 {where} 里既没有柜子也没有路径经过，可能误选了图框/表格，请在CAD里用 DDFD_ROOM_CHECK 核对")
+            warnings.append(f"房间范围 {where} 里既没有柜子也没有路径经过，可能误选了图框/表格，请在CAD里输入 DDFD 选 [R] 核对")
     return warnings
 
 
